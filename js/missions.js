@@ -135,7 +135,7 @@ export function missionTitle(m, galaxy) {
     case 'smuggle': return `Smuggle ${m.units} crates of contraband to ${dest}`;
     case 'story': return m.title;
     case 'escort': return `Escort a Guild convoy to ${dest}`;
-    case 'patrol': return `Clear ${m.count === 1 ? '1 pirate ship' : `${m.count} pirate ships`} from ${dest}`;
+    case 'patrol': return m.count <= 0 ? `Clear the pirates from ${dest}` : `Clear ${m.count === 1 ? '1 pirate ship' : `${m.count} pirate ships`} from ${dest}`;
     case 'bounty': return `Hunt the pirate captain ${m.target} at ${dest}`;
     case 'raid': return `Raid a Guild convoy passing through ${dest}`;
     case 'procure': return `Bring ${m.units} ${GOODS.find(g => g.id === m.goodId).name} to ${dest}`;

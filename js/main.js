@@ -37,6 +37,7 @@ function ensureShip(st) {
   if (!st.crew) st.crew = { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 };
   if (!st.insurance) st.insurance = { plan: 'none', expires: 0, claims: 0 };
   if (st.debt == null) st.debt = 0;
+  ensureSkills(st);
   ensureStory(st);
 }
 function newStarterShip(crew = 6) {
@@ -100,6 +101,8 @@ function getBoard(sys) {
   if (!s.board || state.day - s.board.day >= BOARD_REFRESH_DAYS) {
     s.board = { day: state.day, missions: generateBoard(state, galaxy, sys) };
     if (state.perks.guildCharter) for (const m of s.board.missions) if (m.faction === 'guild') m.pay = Math.round(m.pay * 1.25 / 10) * 10;
+    const neg = 1 + sk('negotiation') * 0.02;
+    for (const m of s.board.missions) m.pay = Math.round(m.pay * neg / 10) * 10;
   }
   return s.board.missions;
 }
@@ -133,7 +136,10 @@ function completeMission(m, msgs) {
   }
   if (m.tier >= 2) addNotoriety(state, m.tier - 1);
   morale(1, msgs);
-  if (m.type === 'smuggle') conduct('smuggle', msgs);
+  gainXP('negotiation', 2, msgs);
+  if (m.type === 'smuggle') { conduct('smuggle', msgs); gainXP('deception', 5, msgs); }
+  state.contractsDone++;
+  if (state.contractsDone % 8 === 0) gainPoint(1, msgs, `completing ${state.contractsDone} contracts`);
   if (['dispatch', 'patrol', 'bounty'].includes(m.type)) conduct('lawful', msgs);
   log(`Completed: ${missionTitle(m, galaxy)} (${m.pay} credits).`);
 }
@@ -153,16 +159,17 @@ function checkDeadlines(msgs) {
 function autoDeliver(msgs) {
   for (const m of [...state.missions]) {
     if (m.dest !== state.location) continue;
-    if (isStory(m)) { if (!m.enemy && !m.deliverOnly) storyMissionDone(m, msgs); continue; }
+    if (isStory(m)) { if (!m.enemy && !m.deliverOnly) storyDone(m, msgs); continue; }
     if (m.type !== 'procure' && !COMBAT_TYPES.includes(m.type)) completeMission(m, msgs);
   }
 }
 
 function customsScan(sys, msgs) {
   if (sys.authority !== 'Concord' || !carryingContraband()) return;
-  const chance = (sys.security === 'high' ? 0.45 : 0.25) * (state.ship.hidden ? 0.5 : 1);
+  const chance = (sys.security === 'high' ? 0.45 : 0.25) * (state.ship.hidden ? 0.5 : 1) * (1 - sk('deception') * 0.05);
   if (Math.random() >= chance) {
     msgs.push('Customs waved you through.');
+    gainXP('deception', 3, msgs);
     return;
   }
   let value = 0;
@@ -194,8 +201,10 @@ function newGame(captain, ship, seedText, ironman) {
     ship: newStarterShip(), fuel: 12, crew: { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 },
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
     ironman: !!ironman, insurance: { plan: 'none', expires: 0, claims: 0 }, debt: 0, arcs: {}, perks: {},
+    skills: null, skillPoints: 3, contractsDone: 0,
   };
   try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ }
+  ensureSkills(state);
   ensureRep(state, galaxy);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
@@ -275,11 +284,13 @@ function sell(goodId, all) {
   }
   if (c.qty === 0) delete state.cargo[goodId];
   const profit = Math.round(earned - costBasis);
+  const tmsgs = [];
+  if (profit > 0) gainXP('trading', Math.ceil(profit / 150), tmsgs);
   recordNotes(state, sys);
   log(`Sold ${sold} ${g.name} for ${earned} credits at ${sys.name} (${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}).`);
   save();
   render();
-  announce(`Sold ${sold} ${g.name} for ${earned}, ${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}. Credits ${state.credits}.`);
+  announce([`Sold ${sold} ${g.name} for ${earned}, ${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}. Credits ${state.credits}.`, ...tmsgs].join(' '));
 }
 
 function refuel(full, emergency) {
@@ -303,12 +314,13 @@ function refuel(full, emergency) {
 function jump(to) {
   const lane = galaxy.adj[state.location].find(l => l.to === to);
   if (!lane) return;
-  const cost = jumpCost(lane.ly, state.ship.tank);
+  const cost = navCost(lane.ly);
   if (state.fuel < cost.fuel) {
     announce(`Not enough fuel. That jump needs ${cost.fuel}, you have ${state.fuel}.`);
     return;
   }
   const from = here();
+  gainXP('navigation', 1 + Math.floor(lane.ly / 5));
   state.fuel -= cost.fuel;
   state.day += cost.days;
   ui.confirmAbandon = null;
@@ -396,7 +408,7 @@ function deliverProcurement(id) {
   c.qty -= m.units;
   if (c.qty <= 0) delete state.cargo[m.goodId];
   const msgs = [];
-  if (isStory(m)) storyMissionDone(m, msgs);
+  if (isStory(m)) storyDone(m, msgs);
   else completeMission(m, msgs);
   save();
   render();
@@ -422,6 +434,119 @@ function abandonMission(id) {
 }
 
 
+
+// ---------- captain skills ----------
+const SKILLS = {
+  piloting: { name: 'Piloting', effect: l => `+${(l * 0.03).toFixed(2)} agility in combat, for dodging and controlling range` },
+  gunnery: { name: 'Gunnery', effect: l => `+${l}% to hit with ship weapons` },
+  repairs: { name: 'Repairs', effect: l => `emergency repairs restore ${3 + l * 2} hull with a ${40 + l * 6}% chance to fix a system; ${l * 3} hull patched after each fight; shipyard repairs ${l * 4}% cheaper` },
+  dueling: { name: 'Dueling', effect: l => `your boarding parties fight ${l * 4}% better, attacking or defending` },
+  leadership: { name: 'Leadership', effect: l => `crew loyalty gains ${l * 5}% bigger, losses ${l * 5}% smaller` },
+  trading: { name: 'Trading', effect: l => `${l}% better buy and sell prices` },
+  negotiation: { name: 'Negotiation', effect: l => `contracts pay ${l * 2}% more, insurance ${l * 2}% cheaper, demands to surrender ${l * 3}% likelier` },
+  navigation: { name: 'Navigation', effect: l => `jumps use less fuel and time, ${l * 3}% fewer random encounters` },
+  deception: { name: 'Deception', effect: l => `customs ${l * 5}% less likely to catch you, and better odds playing both sides` },
+};
+const SKILL_MAX = 10, TRAIN_MAX = 6;
+const TRAINERS = {
+  concord: ['piloting', 'gunnery', 'repairs', 'navigation', 'leadership', 'negotiation'],
+  independent: ['trading', 'negotiation', 'repairs', 'navigation', 'deception'],
+  clan: ['dueling', 'deception', 'gunnery', 'piloting', 'leadership'],
+};
+const xpNeeded = level => 10 + level * 10;
+const sk = id => (state.skills && state.skills[id] ? state.skills[id].level : 0);
+function ensureSkills(st) {
+  if (!st.skills) st.skills = {};
+  for (const id of Object.keys(SKILLS)) if (!st.skills[id]) st.skills[id] = { level: 1, xp: 0 };
+  if (st.skillPoints == null) st.skillPoints = 3;
+  if (st.contractsDone == null) st.contractsDone = 0;
+}
+function gainXP(id, amount, msgs) {
+  const s = state.skills[id];
+  if (!s || s.level >= SKILL_MAX || amount <= 0) return;
+  s.xp += amount;
+  while (s.level < SKILL_MAX && s.xp >= xpNeeded(s.level)) {
+    s.xp -= xpNeeded(s.level);
+    s.level++;
+    if (msgs) msgs.push(`Your ${SKILLS[id].name.toLowerCase()} skill rises to ${s.level}.`);
+    log(`${SKILLS[id].name} rose to ${s.level}.`);
+  }
+  if (s.level >= SKILL_MAX) s.xp = 0;
+}
+function gainPoint(n, msgs, why) {
+  state.skillPoints += n;
+  msgs.push(`You earn ${plural(n, 'skill point')} for ${why}. Spend ${n === 1 ? 'it' : 'them'} in the Captain view.`);
+}
+// Copy captain skills onto the ship before combat math.
+function applyCaptain() {
+  const sh = state.ship;
+  sh.pilotBonus = sk('piloting') * 0.03;
+  sh.gunBonus = sk('gunnery') * 0.01;
+  sh.repairSkill = sk('repairs');
+  sh.negBonus = sk('negotiation') * 0.03;
+  sh.skill = combatSkill() * (1 + sk('dueling') * 0.04);
+}
+function navCost(ly) {
+  const n = sk('navigation');
+  return { fuel: Math.min(state.ship.tank, Math.max(1, Math.ceil(ly / (4 + n * 0.25)))), days: Math.max(1, Math.ceil(ly / (3 + n * 0.2))) };
+}
+function spendPoint(id) {
+  const s = state.skills[id];
+  if (state.skillPoints <= 0) { announce('You have no skill points.'); return; }
+  if (s.level >= SKILL_MAX) { announce(`${SKILLS[id].name} is already at its maximum.`); return; }
+  state.skillPoints--;
+  s.level++;
+  s.xp = 0;
+  save(); render();
+  announce(`${SKILLS[id].name} rises to ${s.level}. ${plural(state.skillPoints, 'skill point')} left.`);
+}
+const trainCost = level => 300 * (level + 1);
+function trainSkill(id) {
+  const s = state.skills[id];
+  const list = TRAINERS[portKind(here())];
+  if (!docked() || !list.includes(id)) { announce('No trainer for that skill here.'); return; }
+  if (s.level >= TRAIN_MAX) { announce(`Trainers can't teach past level ${TRAIN_MAX}. Grow it by using it, or with skill points.`); return; }
+  const cost = trainCost(s.level);
+  if (state.credits < cost) { announce(`Training costs ${cost} credits.`); return; }
+  state.credits -= cost;
+  state.day += 2;
+  const msgs = [];
+  s.level++;
+  s.xp = 0;
+  msgs.push(`You spend 2 days training. ${SKILLS[id].name} rises to ${s.level}.`);
+  payWages(2, msgs);
+  accrueInterest(2, msgs);
+  checkDeadlines(msgs);
+  refreshMarket(state, state.location);
+  log(`Trained ${SKILLS[id].name.toLowerCase()} to ${s.level}.`);
+  save(); render();
+  announce(msgs.join(' '));
+}
+function storyDone(m, msgs) {
+  storyMissionDone(m, msgs);
+  gainPoint(1, msgs, 'a story chapter');
+}
+
+function captainHTML() {
+  const kind = portKind(here());
+  const trainers = docked() ? TRAINERS[kind] : [];
+  const items = Object.entries(SKILLS).map(([id, def]) => {
+    const s = state.skills[id];
+    const prog = s.level >= SKILL_MAX ? 'maximum' : `${s.xp} of ${xpNeeded(s.level)} to next level`;
+    let btns = '';
+    if (state.skillPoints > 0 && s.level < SKILL_MAX) btns += `<button data-action="spendpoint" data-arg="${id}" data-key="spend-${id}" aria-label="Spend a point on ${def.name}">Spend a point</button>`;
+    if (trainers.includes(id) && s.level < TRAIN_MAX) btns += `<button data-action="train" data-arg="${id}" data-key="train-${id}" aria-label="Train ${def.name}, ${trainCost(s.level)} credits and 2 days">Train, ${trainCost(s.level)} credits and 2 days</button>`;
+    const eff = def.effect(s.level);
+    return `<li><p>${def.name} ${s.level}, ${prog}. ${eff.charAt(0).toUpperCase() + eff.slice(1)}.</p>${btns}</li>`;
+  }).join('');
+  const where = trainers.length
+    ? `Trainers here teach ${trainers.map(t => SKILLS[t].name.toLowerCase()).join(', ')}, up to level ${TRAIN_MAX}.`
+    : 'No trainers here.';
+  return `<section id="sec-captain" aria-labelledby="h-captain"><h2 id="h-captain" tabindex="-1">Captain ${esc(state.captain)}</h2>
+    <p>${plural(state.skillPoints, 'skill point')} to spend. ${where} Skills also grow as you use them, up to level ${SKILL_MAX}. Story chapters and every 8 completed contracts earn skill points.</p>
+    <ul class="cards">${items}</ul></section>`;
+}
+
 // ---------- crew ----------
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 function loyaltyName(v) {
@@ -432,6 +557,8 @@ const skillName = v => (v >= 1.4 ? 'elite' : v >= 1.25 ? 'veteran' : v >= 1.1 ? 
 
 function morale(delta, msgs) {
   const c = state.crew;
+  const lead = sk('leadership') * 0.05;
+  delta = delta > 0 ? delta * (1 + lead) : delta * (1 - lead);
   const before = loyaltyName(c.loyalty);
   c.loyalty = clampN(Math.round((c.loyalty + delta) * 10) / 10, 0, 100);
   const after = loyaltyName(c.loyalty);
@@ -515,7 +642,7 @@ function resolveMutiny(choice) {
     state.crew.loyalty = 50;
     msgs.push(`You pay the crew ${cost} credits and they stand down.`);
   } else if (choice === 'fight') {
-    const att = { crew: loyal + 1, skill: combatSkill() + 0.3 };
+    const att = { crew: loyal + 1, skill: (combatSkill() + 0.3) * (1 + sk('dueling') * 0.04) };
     const def = { crew: rebels, skill: state.crew.skill };
     if (!boardingFight(att, def, Math.random)) {
       state.mutiny = null;
@@ -531,6 +658,8 @@ function resolveMutiny(choice) {
     die(`Captain ${state.captain} gave up command to mutineers and was set adrift on day ${state.day}.`);
     return;
   }
+  gainXP('leadership', 4, msgs);
+  if (choice === 'fight') gainXP('dueling', 8, msgs);
   log(msgs[msgs.length - 1]);
   state.mutiny = null;
   finishArrival(msgs);
@@ -560,6 +689,7 @@ function crewAction(kind) {
     state.credits -= cost;
     const msgs = [`Paid a bonus of ${cost} credits.`];
     morale(state.day - c.lastBonusDay >= 5 ? 10 : 3, msgs);
+    gainXP('leadership', 2, msgs);
     c.lastBonusDay = state.day;
     save(); render(); announce(msgs.join(' '));
   } else if (kind === 'leave') {
@@ -570,6 +700,7 @@ function crewAction(kind) {
     const msgs = [`Your crew takes a day of shore leave for ${cost} credits.`];
     payWages(1, msgs);
     morale(8, msgs);
+    gainXP('leadership', 2, msgs);
     checkDeadlines(msgs);
     refreshMarket(state, state.location);
     save(); render(); announce(msgs.join(' '));
@@ -717,7 +848,7 @@ function randomEncounter(sys) {
     return { enemy, range: 2, intro: 'A bounty hunter drops out of a jump right on top of you. Your face is on their screen.' };
   }
   const escort = state.missions.some(m => m.type === 'escort');
-  let chance = { high: 0.06, medium: 0.14, low: 0.24, none: 0.34 }[sys.security];
+  let chance = { high: 0.06, medium: 0.14, low: 0.24, none: 0.34 }[sys.security] * (1 - sk('navigation') * 0.03);
   if (escort) chance = Math.max(chance, 0.4);
   if (rand() >= chance) return null;
   let type = pickW({ high: { patrol: 5, merchant: 4, pirate: 1 }, medium: { pirate: 4.5, merchant: 3.5, patrol: 2 }, low: { pirate: 7, merchant: 3 }, none: { pirate: 8, merchant: 2 } }[sys.security]);
@@ -743,7 +874,7 @@ function randomEncounter(sys) {
 function startCombat(enc, pendingArrival, msgs = []) {
   if (!state.ironman) { try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
   state.ship.shield = state.ship.shieldMax;
-  state.ship.skill = combatSkill();
+  applyCaptain();
   state.combat = {
     enemy: enc.enemy, range: enc.range, turn: 0, move: 0, target: 'hull',
     phase: enc.approach ? 'approach' : 'fight', lines: [], intro: enc.intro,
@@ -764,12 +895,20 @@ function combatAction(action) {
   if (action === 'board') {
     if (cb.range !== 0 || effPower(cb.enemy, 'engines') > 0) { announce('You can only board a ship whose engines are disabled, at close range.'); return; }
   }
+  applyCaptain();
   const r = resolveTurn(cb, state.ship, action);
-  cb.lines = r.lines;
-  if (r.outcome) { endFight(r.outcome, r.lines); return; }
+  const xm = [];
+  if (r.hits) gainXP('gunnery', r.hits, xm);
+  if (r.moved) gainXP('piloting', 1, xm);
+  if (r.escaped) gainXP('piloting', 5, xm);
+  if (action === 'repair') gainXP('repairs', 4, xm);
+  if (r.boarded || action === 'board') gainXP('dueling', 8, xm);
+  if (r.demanded) gainXP('negotiation', 3, xm);
+  cb.lines = [...r.lines, ...xm];
+  if (r.outcome) { endFight(r.outcome, cb.lines); return; }
   save();
   render();
-  announce(r.lines.join(' '));
+  announce(cb.lines.join(' '));
 }
 
 function attackMerchant() {
@@ -845,7 +984,7 @@ function defeatEffects(how, msgs) {
     } else if (m.type === 'raid') {
       completeMission(m, msgs);
     } else if (isStory(m)) {
-      storyMissionDone(m, msgs);
+      storyDone(m, msgs);
     }
   }
 }
@@ -878,6 +1017,11 @@ function endFight(outcome, lines) {
   if (outcome === 'player-killed') {
     die(`Captain ${state.captain} was killed in a boarding fight on day ${state.day}.`);
     return;
+  }
+  if (outcome !== 'player-destroyed' && sk('repairs') > 0 && state.ship.hull < state.ship.hullMax) {
+    const fix = Math.min(state.ship.hullMax - state.ship.hull, sk('repairs') * 3);
+    state.ship.hull += fix;
+    msgs.push(`Field repairs patch ${fix} hull.`);
   }
   if (outcome === 'player-destroyed') {
     const hater = e.side !== 'merchant' && getRep(state, e.faction) <= -60;
@@ -1059,7 +1203,7 @@ function insuranceQuote(planId) {
   const guild = getRep(state, 'guild');
   if (guild <= -30) return { denied: 'The Merchant Guild will not insure you while it is hostile to you.' };
   if (getRep(state, 'concord') <= -60) return { denied: 'No insurer will cover a captain the Concord hates.' };
-  let risk = 1 + 0.25 * state.insurance.claims;
+  let risk = (1 + 0.25 * state.insurance.claims) * (1 - sk('negotiation') * 0.02);
   if (state.notoriety >= 25) risk += 0.3;
   if (getRep(state, 'concord') <= -10) risk += 0.5;
   if (guild >= 30) risk -= 0.2;
@@ -1167,8 +1311,10 @@ function setPower(sysName, delta) {
 }
 
 // ---------- shipyard ----------
-const hullRepairPrice = sys => ({ high: 5, medium: 7, low: 9, none: 11 }[sys.security]);
-const SYSTEM_REPAIR_PRICE = 40, CREW_PRICE = 50, MISSILE_PRICE = 30;
+const repairDiscount = () => 1 - sk('repairs') * 0.04;
+const hullRepairPrice = sys => Math.max(1, Math.round({ high: 5, medium: 7, low: 9, none: 11 }[sys.security] * repairDiscount()));
+const sysRepairPrice = () => Math.round(40 * repairDiscount());
+const CREW_PRICE = 50, MISSILE_PRICE = 30;
 
 function repairHull() {
   const price = hullRepairPrice(here());
@@ -1178,14 +1324,15 @@ function repairHull() {
   if (n <= 0) { announce('Not enough credits.'); return; }
   state.ship.hull += n;
   state.credits -= n * price;
+  gainXP('repairs', 1);
   save(); render();
   announce(`Repaired ${n} hull for ${n * price}. Hull ${state.ship.hull} of ${state.ship.hullMax}.`);
 }
 function repairSystems() {
   let spent = 0;
   for (const s of SYSTEMS) {
-    while (state.ship.sys[s] < 3 && state.credits >= SYSTEM_REPAIR_PRICE) {
-      state.ship.sys[s]++; state.credits -= SYSTEM_REPAIR_PRICE; spent += SYSTEM_REPAIR_PRICE;
+    while (state.ship.sys[s] < 3 && state.credits >= sysRepairPrice()) {
+      state.ship.sys[s]++; state.credits -= sysRepairPrice(); spent += sysRepairPrice();
     }
   }
   if (!spent) { announce(SYSTEMS.every(s => state.ship.sys[s] === 3) ? 'All systems are operational.' : 'Not enough credits.'); return; }
@@ -1250,7 +1397,7 @@ function statusHTML() {
     let ly = 0, fuel = 0, days = 0;
     for (let i = 0; i < path.length - 1; i++) {
       const lane = galaxy.adj[path[i]].find(l => l.to === path[i + 1]);
-      const c = jumpCost(lane.ly, state.ship.tank);
+      const c = navCost(lane.ly);
       ly += lane.ly; fuel += c.fuel; days += c.days;
     }
     course = `<li>Course to ${esc(galaxy.systems[state.course].name)}: ${plural(path.length - 1, 'jump')}, ${ly.toFixed(1)} light-years, ${fuel} fuel, about ${plural(days, 'day')}.</li>`;
@@ -1387,11 +1534,11 @@ function servicesHTML() {
   const sysNeed = SYSTEMS.reduce((n, x) => n + (3 - sh.sys[x]), 0);
   const misNeed = sh.missilesMax - sh.missiles;
   return `<section id="sec-services" aria-labelledby="h-services"><h2 id="h-services" tabindex="-1">Shipyard</h2>
-    <p>Credits ${state.credits}. Fuel ${price} per unit, hull repair ${hullRepairPrice(sys)} per point, system repair ${SYSTEM_REPAIR_PRICE} per level.</p>
+    <p>Credits ${state.credits}. Fuel ${price} per unit, hull repair ${hullRepairPrice(sys)} per point, system repair ${sysRepairPrice()} per level.</p>
     <button data-action="refuel" data-key="refuel">Refuel to full${need ? `, ${need * price} credits` : ''}</button>
     <button data-action="fuel1" data-key="fuel1">Buy 1 fuel</button>
     ${hullNeed ? `<button data-action="repairhull" data-key="repairhull">Repair hull, ${hullNeed * hullRepairPrice(sys)} credits</button>` : ''}
-    ${sysNeed ? `<button data-action="repairsys" data-key="repairsys">Repair systems, ${sysNeed * SYSTEM_REPAIR_PRICE} credits</button>` : ''}
+    ${sysNeed ? `<button data-action="repairsys" data-key="repairsys">Repair systems, ${sysNeed * sysRepairPrice()} credits</button>` : ''}
     ${misNeed > 0 ? `<button data-action="missiles" data-key="missiles">Restock ${plural(misNeed, 'missile')}, ${misNeed * MISSILE_PRICE} credits</button>` : ''}
     </section>`;
 }
@@ -1467,6 +1614,7 @@ function combatHTML() {
       <li>Systems: ${systemsText(e)}</li><li>Crew ${e.crew}</li></ul>
       <h3>Weapons</h3><ul>${e.weapons.map(id => weaponLine(e, p, id, cb.range, 'hull', false)).join('')}</ul></section>
     <section id="sec-other" aria-labelledby="h-other"><h2 id="h-other" tabindex="-1">Other actions</h2>
+      <button data-action="c-repair" data-key="c-repair">Emergency repairs instead of firing</button>
       ${demand}
       ${boardOk ? `<button data-action="c-board" data-key="c-board">Board them, odds ${odds}. If you lose, you die.</button>` : '<p>Boarding needs close range and their engines disabled.</p>'}
       ${surrender}</section>`;
@@ -1498,7 +1646,7 @@ function travelHTML() {
   }
   const lanes = galaxy.adj[state.location].map(l => {
     const s = galaxy.systems[l.to];
-    const c = jumpCost(l.ly, state.ship.tank);
+    const c = navCost(l.ly);
     const visited = state.systems[l.to]?.visited ? ', visited' : '';
     const onCourse = l.to === next ? ', on your course' : '';
     const contract = state.missions.some(m => m.dest === l.to) ? ', contract destination' : '';
@@ -1663,7 +1811,7 @@ function mutinyHTML() {
     <button data-action="mutiny" data-arg="yield" data-key="mutiny-yield">Give up command</button>`;
 }
 
-const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['crew', 'Crew'], ['records', 'Records']];
+const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['records', 'Records']];
 
 function gameHTML() {
   if (state.mutiny) return mutinyHTML();
@@ -1677,6 +1825,7 @@ function gameHTML() {
     case 'market': view = isDocked ? `${marketHTML()}${priceNotesHTML()}` : `${refusedHTML()}${priceNotesHTML()}`; break;
     case 'shipyard': view = isDocked ? `${servicesHTML()}${insuranceHTML()}${outfittingHTML()}${dealerHTML()}` : refusedHTML(); break;
     case 'crew': view = crewHTML(); break;
+    case 'captain': view = captainHTML(); break;
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
@@ -1757,6 +1906,9 @@ app.addEventListener('click', e => {
     case 'c-power': { const [x, d] = arg.split(':'); setPower(x, Number(d)); break; }
     case 'c-turn': combatAction('fire'); break;
     case 'c-demand': combatAction('demand'); break;
+    case 'c-repair': combatAction('repair'); break;
+    case 'spendpoint': spendPoint(arg); break;
+    case 'train': trainSkill(arg); break;
     case 'c-board': combatAction('board'); break;
     case 'c-surrender': playerSurrender(); break;
     case 'c-loot': surrenderChoice('loot'); break;

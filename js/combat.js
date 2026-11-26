@@ -47,11 +47,13 @@ export function usedPower(c) {
   return SYSTEMS.reduce((sum, s) => sum + c.power[s], 0);
 }
 
+export const agi = c => c.agility + (c.pilotBonus || 0);
+
 export function hitChance(attacker, target, weaponId, range, aim) {
   const w = WEAPONS[weaponId];
   const base = w.acc[range];
   if (base <= 0) return 0;
-  let acc = base - 0.04 * effPower(target, 'engines') * target.agility + (attacker.accBonus || 0);
+  let acc = base - 0.04 * effPower(target, 'engines') * agi(target) + (attacker.accBonus || 0) + (attacker.gunBonus || 0);
   if (aim !== 'hull') acc -= 0.1;
   return Math.max(0.05, Math.min(0.95, acc));
 }
@@ -163,7 +165,7 @@ function describeShots(shots, mine) {
 
 function moveScore(c, rng) {
   const e = effPower(c, 'engines');
-  return e === 0 ? 0 : e * c.agility + rng() * 2;
+  return e === 0 ? 0 : e * agi(c) + rng() * 2;
 }
 
 // Returns 'player' or 'enemy' if someone escaped.
@@ -178,6 +180,7 @@ function resolveMovement(cb, p, pMove, eMove, rng, lines) {
   else if (eMove === 0) { if (sp > se * 0.6) { winnerMove = pMove; mover = 'player'; } }
   else if (sp >= se) { winnerMove = pMove; mover = 'player'; } else { winnerMove = eMove; mover = 'enemy'; }
 
+  cb.lastMover = mover;
   if (cb.range === 3 && winnerMove === 1 && mover) {
     if (mover === 'both') return 'both';
     return mover;
@@ -229,14 +232,14 @@ function surrenderCheck(e, rng) {
   return (hp < th || (e.sys.engines === 0 && hp < 0.5)) && rng() < (e.kind === 'flagship' || e.kind === 'dreadnought' ? 0.3 : 0.45);
 }
 
-export function demandSurrenderChance(e) {
+export function demandSurrenderChance(e, bonus = 0) {
   if (e.side === 'concord') return 0;
   let c = (1 - e.hull / e.hullMax) * 0.7;
   if (e.sys.engines === 0) c += 0.25;
   if (e.sys.weapons === 0) c += 0.2;
   if (e.side === 'merchant') c += 0.25;
   if (e.kind === 'flagship' || e.kind === 'dreadnought') c -= 0.2;
-  return Math.max(0, Math.min(0.9, c));
+  return Math.max(0, Math.min(0.9, c + (c > 0 ? bonus : 0)));
 }
 
 // One combat turn. action: 'fire' | 'demand' | 'board'.
@@ -250,45 +253,56 @@ export function resolveTurn(cb, p, action, rng = Math.random) {
   if (action === 'board') {
     const won = boardingFight(p, e, rng);
     return won
-      ? { lines: [`Your crew storms their ship and takes it. You have ${p.crew} crew left.`], outcome: 'captured' }
+      ? { lines: [`Your crew storms their ship and takes it. You have ${p.crew} crew left.`], outcome: 'captured', boarded: true }
       : { lines: ['Your boarding party is overwhelmed and their crew pours onto your ship.'], outcome: 'player-killed' };
   }
 
-  const escaped = resolveMovement(cb, p, action === 'fire' || action === 'demand' ? cb.move : 0, eo.move, rng, lines);
+  const escaped = resolveMovement(cb, p, ['fire', 'demand', 'repair'].includes(action) ? cb.move : 0, eo.move, rng, lines);
+  const moved = cb.move !== 0 && (cb.lastMover === 'player' || cb.lastMover === 'both');
   if (escaped === 'both') return { lines: [...lines, 'Both ships break away.'], outcome: 'separated' };
-  if (escaped === 'player') return { lines: [...lines, 'You break away and escape.'], outcome: 'player-escaped' };
+  if (escaped === 'player') return { lines: [...lines, 'You break away and escape.'], outcome: 'player-escaped', escaped: true };
   if (escaped === 'enemy') return { lines: [...lines, 'They break away and escape.'], outcome: 'enemy-escaped' };
 
   let pShots = [];
   if (action === 'demand') {
-    if (rng() < demandSurrenderChance(e)) return { lines: [...lines, 'They answer your demand and surrender.'], outcome: 'enemy-surrendered' };
+    if (rng() < demandSurrenderChance(e, p.negBonus || 0)) return { lines: [...lines, 'They answer your demand and surrender.'], outcome: 'enemy-surrendered', demanded: true };
     lines.push('They refuse to surrender.');
+  } else if (action === 'repair') {
+    const lvl = p.repairSkill || 0;
+    const hull = Math.min(p.hullMax - p.hull, 3 + lvl * 2);
+    p.hull += hull;
+    const worst = SYSTEMS.filter(x => p.sys[x] < 3).sort((a, b) => p.sys[a] - p.sys[b])[0];
+    let fixed = '';
+    if (worst && rng() < 0.4 + lvl * 0.06) { p.sys[worst]++; fixed = ` Your ${worst} are now ${SYSTEM_STATE[p.sys[worst]]}.`; }
+    lines.push(`Your crew makes emergency repairs: ${hull} hull restored.${fixed}`);
   } else {
     pShots = fire(p, e, cb.range, cb.target, rng);
   }
   const eShots = fire(e, p, cb.range, eo.aim, rng);
+  const hits = pShots.filter(x => x.dmg).length;
   const events = [];
   for (const s of pShots) if (s.dmg) applyHit(e, s.dmg, cb.target, rng, events, 'Their');
   for (const s of eShots) if (s.dmg) applyHit(p, s.dmg, eo.aim, rng, events, 'Your');
-  if (action !== 'demand') lines.push(describeShots(pShots, true));
+  if (action === 'fire') lines.push(describeShots(pShots, true));
   lines.push(describeShots(eShots, false));
   lines.push(...events);
 
-  if (p.hull <= 0) return { lines: [...lines, 'Your ship breaks apart.'], outcome: 'player-destroyed' };
-  if (e.hull <= 0) return { lines: [...lines, 'Their ship explodes.'], outcome: 'enemy-destroyed' };
+  const extra = { hits, moved };
+  if (p.hull <= 0) return { lines: [...lines, 'Your ship breaks apart.'], outcome: 'player-destroyed', ...extra };
+  if (e.hull <= 0) return { lines: [...lines, 'Their ship explodes.'], outcome: 'enemy-destroyed', ...extra };
 
   // Pirates board a crippled ship at close range.
   if (e.side === 'pirate' && cb.range === 0 && effPower(p, 'engines') === 0 && e.crew >= p.crew && e.hull > e.hullMax * 0.4) {
     lines.push('They lock on and board you!');
     const enemyWon = boardingFight(e, p, rng);
-    if (!enemyWon) return { lines: [...lines, `Your crew drives them back and takes their ship. You have ${p.crew} crew left.`], outcome: 'captured' };
+    if (!enemyWon) return { lines: [...lines, `Your crew drives them back and takes their ship. You have ${p.crew} crew left.`], outcome: 'captured', boarded: true, ...extra };
     return { lines: [...lines, 'Your crew is overwhelmed.'], outcome: 'player-killed' };
   }
-  if (surrenderCheck(e, rng)) return { lines: [...lines, 'They signal their surrender.'], outcome: 'enemy-surrendered' };
+  if (surrenderCheck(e, rng)) return { lines: [...lines, 'They signal their surrender.'], outcome: 'enemy-surrendered', ...extra };
   if (e.fleeing && eo.move === 1) lines.push('They are trying to flee.');
 
   regenShields(p);
   regenShields(e);
   lines.push(`Your hull ${p.hull}, shields ${p.shield}. Their hull ${e.hull}, shields ${e.shield}.`);
-  return { lines, outcome: null };
+  return { lines, outcome: null, ...extra };
 }

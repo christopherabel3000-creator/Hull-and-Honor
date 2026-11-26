@@ -51,9 +51,13 @@ export function prices(state, sys, g) {
   }
   // Good local standing gets you up to 5% better prices; bad standing costs you.
   const local = s.local * 0.0005;
+  // The captain's trading skill: 1% better prices per level.
+  const trade = ((state.skills && state.skills.trading && state.skills.trading.level) || 0) * 0.01;
   const raw = g.base * m * sys.priceFactor[g.id] * (1 + (s.noise[g.id] ?? 0)) * (1 + (s.pressure[g.id] ?? 0));
-  const buy = Math.max(1, Math.round(raw * (1 - local)));
-  return { buy, sell: Math.max(1, Math.round(raw * SPREAD * (1 + local))) };
+  const buy = Math.max(1, Math.round(raw * (1 - local - trade)));
+  // Never let the sell price at a port reach its own buy price.
+  const sell = Math.min(Math.round(raw * SPREAD * (1 + local + trade)), Math.floor(buy * 0.94));
+  return { buy, sell: Math.max(1, sell) };
 }
 
 // Buying pushes the local price up; selling pushes it down.

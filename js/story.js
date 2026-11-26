@@ -151,7 +151,7 @@ export const ARCS = {
             resolve: (c, msgs) => { changeRep(c.st, 'concord', -40, msgs); changeRep(c.st, clanKey(c.data.clan), 15, msgs); api.receive(4000, msgs); msgs.push('The clan pays 4000 credits. Concord intelligence will come for you.'); c.data.side = 'clan'; return 'next'; } },
           { id: 'both', label: 'Feed both sides false information',
             resolve: (c, msgs) => {
-              if (Math.random() < 0.5) { changeRep(c.st, 'concord', 5, msgs); changeRep(c.st, clanKey(c.data.clan), 5, msgs); api.receive(6000, msgs); msgs.push('Both sides pay, and neither suspects. 6000 credits.'); }
+              if (Math.random() < 0.5 + ((c.st.skills && c.st.skills.deception.level) || 0) * 0.03) { changeRep(c.st, 'concord', 5, msgs); changeRep(c.st, clanKey(c.data.clan), 5, msgs); api.receive(6000, msgs); msgs.push('Both sides pay, and neither suspects. 6000 credits.'); }
               else { changeRep(c.st, 'concord', -30, msgs); changeRep(c.st, clanKey(c.data.clan), -30, msgs); addNotoriety(c.st, 10); msgs.push('Both sides find out.'); }
               return 'end';
             } },

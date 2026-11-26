@@ -111,6 +111,28 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **Saving:** autosave plus 3 manual save slots (Records view; overwriting asks to confirm). Saved games can be loaded from the title screen and the game over screen.
 - **One life mode** (chosen at the start): no save slots and no reloading from before a fight. Death ends the campaign for good.
 
+## Captain skills (as built)
+
+Nine skills, levels 1 to 10, shown in the Captain view. Every captain starts at 1 in each with 3 skill points to spend.
+
+| Skill | Effect per level | Grows by |
+|---|---|---|
+| Piloting | +0.03 agility in combat (dodging, range control, escapes) | winning maneuvers, escaping |
+| Gunnery | +1% to hit | landing hits |
+| Repairs | emergency repairs in combat (3 + 2 per level hull, 40% + 6% per level to fix a system), 3 hull patched after each fight, shipyard repairs 4% cheaper | emergency repairs, shipyard hull repairs |
+| Dueling | boarding parties and mutiny fights 4% stronger | boarding fights, mutiny fights |
+| Leadership | loyalty gains 5% bigger, losses 5% smaller | bonuses, shore leave, ending mutinies |
+| Trading | 1% better buy and sell prices | profitable sales |
+| Negotiation | contracts pay 2% more, insurance 2% cheaper, surrender demands 3% likelier | completing contracts, successful demands |
+| Navigation | less fuel and travel time per jump, 3% fewer random encounters | every jump (longer jumps teach more) |
+| Deception | customs 5% less likely to catch you; better odds feeding both sides false information | getting contraband past customs, smuggling contracts |
+
+- **Experience:** reaching the next level takes 10 + 10 × current level experience.
+- **Trainers:** pay 300 × (level + 1) credits and spend 2 days to gain a level, up to level 6. Concord ports teach piloting, gunnery, repairs, navigation, leadership and negotiation. Independent ports teach trading, negotiation, repairs, navigation and deception. Pirate ports teach dueling, deception, gunnery, piloting and leadership.
+- **Skill points:** 1 per story chapter completed and 1 per 8 contracts completed. Each point raises any skill by a level, up to 10.
+- **Emergency repairs** is a new combat action, used instead of firing.
+- A port's sell price can never reach its own buy price, so better prices can't be farmed at one port.
+
 ## Stage 6 details (as built)
 
 Story offers appear on arrival when their conditions are met and are accepted or declined in the Contracts view. Story objectives sit in your contract list (they don't count toward the 5-contract limit and have no deadline). Choices are made in the Story part of the Contracts view. Abandoning a story objective ends that story.
