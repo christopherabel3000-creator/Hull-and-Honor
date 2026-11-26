@@ -19,6 +19,9 @@ import {
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
+const SLOT_COUNT = 3;
+const slotKey = i => `hullandhonor.slot${i}.v1`;
+function readKey(k) { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
 const WAGE = 2; // credits per crew member per day
 
 function ensureShip(st) {
@@ -31,6 +34,8 @@ function ensureShip(st) {
   if (sh.crew == null) sh.crew = 6;
   applyStats(sh);
   if (!st.crew) st.crew = { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 };
+  if (!st.insurance) st.insurance = { plan: 'none', expires: 0, claims: 0 };
+  if (st.debt == null) st.debt = 0;
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -43,7 +48,7 @@ const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
-const ui = { view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
+const ui = { confirmSlot: null, view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
 
 // ---------- helpers ----------
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -95,8 +100,8 @@ function getBoard(sys) {
 // ---------- contracts ----------
 function completeMission(m, msgs) {
   state.missions = state.missions.filter(x => x !== m);
-  state.credits += m.pay;
   msgs.push(`Contract complete: ${missionTitle(m, galaxy)}. Paid ${m.pay} credits.`);
+  receive(m.pay, msgs);
   if (m.type === 'smuggle') {
     changeRep(state, m.faction, 4 + m.tier, msgs);
     for (const k of factionKeys(state)) if (k.startsWith('clan:') && k !== m.faction) changeRep(state, k, 1, msgs);
@@ -171,7 +176,7 @@ function customsScan(sys, msgs) {
 }
 
 // ---------- game actions ----------
-function newGame(captain, ship, seedText) {
+function newGame(captain, ship, seedText, ironman) {
   const seed = seedText || String(Math.floor(Math.random() * 1e9));
   galaxy = generateGalaxy(seed);
   state = {
@@ -179,7 +184,9 @@ function newGame(captain, ship, seedText) {
     captain: captain || 'Captain', shipName: ship || 'Wayfarer',
     ship: newStarterShip(), fuel: 12, crew: { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 },
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
+    ironman: !!ironman, insurance: { plan: 'none', expires: 0, claims: 0 }, debt: 0,
   };
+  try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ }
   ensureRep(state, galaxy);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
@@ -298,6 +305,11 @@ function jump(to) {
   ui.confirmAbandon = null;
   const msgs = [];
   payWages(cost.days, msgs);
+  accrueInterest(cost.days, msgs);
+  if (state.insurance.plan !== 'none' && state.day > state.insurance.expires) {
+    msgs.push('Your insurance policy has lapsed.');
+    state.insurance.plan = 'none';
+  }
   checkDeadlines(msgs);
   arrive(to);
   const sys = here();
@@ -609,6 +621,7 @@ function buyShip(classId) {
   const sys = here();
   const c = SHIP_CLASSES[classId];
   if (!shipRequirementMet(c, sys)) { announce(shipRequirementText(c, sys)); return; }
+  if (state.debt > 0) { announce('The dealer will not sell you a ship while you owe the Merchant Guild.'); return; }
   const cost = c.price - tradeInValue(state.ship);
   if (state.credits < cost) { announce(`Not enough credits. You need ${cost}.`); return; }
   const cargoNeed = holdUsed();
@@ -698,7 +711,7 @@ function randomEncounter(sys) {
 }
 
 function startCombat(enc, pendingArrival, msgs = []) {
-  try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  if (!state.ironman) { try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
   state.ship.shield = state.ship.shieldMax;
   state.ship.skill = combatSkill();
   state.combat = {
@@ -778,7 +791,7 @@ function defeatEffects(how, msgs) {
       changeRep(state, 'concord', 2, msgs);
       if (getRep(state, 'concord') > -30) {
         const bounty = { cutter: 120, raider: 220, marauder: 380, flagship: 600 }[e.kind];
-        state.credits += bounty;
+        receive(bounty);
         msgs.push(`The Concord pays a ${bounty} credit bounty.`);
       }
     }
@@ -814,6 +827,7 @@ function loseCargoMissions(msgs, reason) {
 
 function die(reason) {
   state.dead = { reason, day: state.day };
+  if (state.ironman) { try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ } }
   state.combat = null;
   log(reason);
   save();
@@ -842,7 +856,7 @@ function endFight(outcome, lines) {
     morale(-10, msgs);
   } else if (outcome === 'enemy-destroyed') {
     const salvage = 30 + Math.floor(rand() * 90);
-    state.credits += salvage;
+    receive(salvage);
     msgs.push(`You salvage ${salvage} credits worth of wreckage.`);
     defeatEffects('destroyed', msgs);
   } else if (outcome === 'captured') {
@@ -926,19 +940,161 @@ function playerSurrender() {
 }
 
 function rescue(msgs) {
+  const cb = state.combat;
   const hops = hopCounts(galaxy, state.location);
-  const order = galaxy.systems.map(s => s.id).filter(id => hops[id] < Infinity).sort((a, b) => hops[a] - hops[b]);
+  const order = galaxy.systems.map(x => x.id).filter(id => hops[id] < Infinity).sort((a, b) => hops[a] - hops[b]);
   const port = order.find(id => dockingStatus(state, galaxy.systems[id]).ok) ?? state.location;
   const name = state.shipName;
-  const deductible = Math.min(state.credits, 500);
-  state.credits -= deductible;
+  const old = state.ship;
+  const ins = state.insurance;
+  const covered = ins.plan !== 'none' && state.day <= ins.expires;
+  const piracy = cb && (cb.attacked || (combatMission() && combatMission().type === 'raid'));
   state.cargo = {};
   loseCargoMissions(msgs, 'ship destroyed');
-  state.ship = newStarterShip(state.ship.crew);
+  msgs.push(`You escape in your pod and are towed to ${galaxy.systems[port].name}.`);
+  if (covered && piracy) msgs.push('Your insurer refuses the claim: losses during piracy are not covered.');
+  if (covered && !piracy) {
+    const plan = INSURANCE[ins.plan];
+    ins.claims++;
+    if (ins.plan === 'basic') {
+      state.ship = newStarterShip(old.crew);
+      const payout = Math.round(tradeInValue({ ...old, hull: old.hullMax }) * 0.5 / 10) * 10;
+      msgs.push(`Basic insurance gives you a used Mule freighter and pays ${payout} credits toward your loss, minus a ${plan.deductible} credit deductible.`);
+      receive(payout, msgs, true);
+    } else {
+      state.ship = buildShip(old.classId);
+      state.ship.weapons = [...old.weapons];
+      if (ins.plan === 'premium') state.ship.upgrades = [...old.upgrades];
+      applyStats(state.ship);
+      state.ship.hull = state.ship.hullMax;
+      state.ship.missiles = state.ship.missilesMax;
+      state.ship.crew = Math.min(old.crew, state.ship.crewMax);
+      state.ship.power = { ...old.power };
+      applyStats(state.ship);
+      msgs.push(`${plan.name} replaces the ${name} with a new ${state.ship.cls}${ins.plan === 'premium' ? ', with all weapons and upgrades' : ' with the same weapons, but no upgrades'}. Deductible ${plan.deductible} credits.`);
+    }
+    charge(plan.deductible, msgs);
+    msgs.push('Future premiums will be higher.');
+  } else {
+    state.ship = newStarterShip(old.crew);
+    state.ship.hull = Math.round(state.ship.hullMax / 2);
+    msgs.push(`With no insurance, the Merchant Guild sells you a battered Mule freighter for ${UNINSURED_COST} credits.`);
+    charge(UNINSURED_COST, msgs);
+  }
   state.fuel = state.ship.tank;
   arrive(port);
-  msgs.push(`You escape in your pod and are towed to ${galaxy.systems[port].name}. Basic insurance replaces the ${name} with a used Mule freighter, minus a ${deductible} credit deductible.`);
   log(`The ${name} was destroyed. Rescued at ${galaxy.systems[port].name}.`);
+}
+
+// ---------- money, debt and insurance ----------
+const UNINSURED_COST = 3000;
+const INSURANCE = {
+  basic: { name: 'Basic insurance', rate: 0.03, deductible: 500, desc: 'a used Mule freighter plus half your ship’s value in credits' },
+  full: { name: 'Full insurance', rate: 0.06, deductible: 1000, desc: 'a new ship of the same class with the same weapons, but not upgrades' },
+  premium: { name: 'Premium insurance', rate: 0.09, deductible: 1500, desc: 'a new ship of the same class with all weapons and upgrades' },
+};
+const POLICY_DAYS = 30;
+
+// Money you earn goes to your debt first (half of each payment) while you owe the Guild.
+function receive(amount, msgs, quiet) {
+  if (state.debt > 0) {
+    const toDebt = Math.min(state.debt, Math.round(amount / 2));
+    state.debt -= toDebt;
+    amount -= toDebt;
+    if (msgs && toDebt) msgs.push(`${toDebt} credits go to your Guild debt${state.debt ? `, ${state.debt} left` : ', which is now paid off'}.`);
+  }
+  state.credits += amount;
+}
+function charge(amount, msgs) {
+  const paid = Math.min(amount, state.credits);
+  state.credits -= paid;
+  if (paid < amount) {
+    state.debt += amount - paid;
+    msgs.push(`You could not pay ${amount - paid} credits. It becomes a debt to the Merchant Guild. You now owe ${state.debt}.`);
+  }
+}
+function accrueInterest(days, msgs) {
+  if (state.debt <= 0) return;
+  const before = state.debt;
+  state.debt = Math.ceil(state.debt * Math.pow(1.005, days));
+  if (state.debt - before >= 1 && msgs && before > 0) { /* interest is shown in the shipyard */ }
+}
+function insuredValue() {
+  return tradeInValue({ ...state.ship, hull: state.ship.hullMax });
+}
+function insuranceQuote(planId) {
+  const guild = getRep(state, 'guild');
+  if (guild <= -30) return { denied: 'The Merchant Guild will not insure you while it is hostile to you.' };
+  if (getRep(state, 'concord') <= -60) return { denied: 'No insurer will cover a captain the Concord hates.' };
+  let risk = 1 + 0.25 * state.insurance.claims;
+  if (state.notoriety >= 25) risk += 0.3;
+  if (getRep(state, 'concord') <= -10) risk += 0.5;
+  if (guild >= 30) risk -= 0.2;
+  const premium = Math.max(100, Math.round(insuredValue() * INSURANCE[planId].rate * risk / 10) * 10);
+  return { premium, risk };
+}
+function buyInsurance(planId) {
+  if (!docked() || !offices(here()).includes('guild')) { announce('Insurance is sold at Merchant Guild offices.'); return; }
+  const q = insuranceQuote(planId);
+  if (q.denied) { announce(q.denied); return; }
+  if (state.credits < q.premium) { announce(`Not enough credits. The premium is ${q.premium}.`); return; }
+  state.credits -= q.premium;
+  const ins = state.insurance;
+  const start = ins.plan === planId && ins.expires >= state.day ? ins.expires : state.day;
+  ins.plan = planId;
+  ins.expires = start + POLICY_DAYS;
+  log(`Bought ${INSURANCE[planId].name.toLowerCase()} until day ${ins.expires}.`);
+  save(); render();
+  announce(`${INSURANCE[planId].name} for ${q.premium} credits, covered until day ${ins.expires}.`);
+}
+function repayDebt() {
+  const n = Math.min(state.debt, state.credits);
+  if (!n) { announce(state.debt ? 'Not enough credits.' : 'You owe nothing.'); return; }
+  state.credits -= n;
+  state.debt -= n;
+  save(); render();
+  announce(state.debt ? `Repaid ${n}. You still owe ${state.debt}.` : `Repaid ${n}. Your debt is cleared.`);
+}
+
+// ---------- saved games ----------
+function slotSummary(st) {
+  if (!st) return 'Empty';
+  const g = generateGalaxy(st.seed);
+  return `Captain ${st.captain} of the ${st.shipName}, day ${st.day}, at ${g.systems[st.location].name}, ${st.credits} credits`;
+}
+function saveToSlot(i) {
+  if (state.ironman) return;
+  if (state.combat || state.mutiny) { announce('You cannot save in the middle of this.'); return; }
+  const existing = readKey(slotKey(i));
+  if (existing && ui.confirmSlot !== i) {
+    ui.confirmSlot = i;
+    render();
+    announce(`Slot ${i} already holds a save. Press Confirm overwrite to replace it.`);
+    return;
+  }
+  ui.confirmSlot = null;
+  try { localStorage.setItem(slotKey(i), JSON.stringify(state)); } catch (e) { announce('Could not save.'); return; }
+  render();
+  announce(`Saved to slot ${i}.`);
+}
+function loadSlot(i) {
+  const st = readKey(slotKey(i));
+  if (!st) return;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(st)); } catch (e) { /* ignore */ }
+  continueGame();
+  announce(`Loaded slot ${i}. You are at ${here().name}, day ${state.day}.`);
+}
+function slotsHTML(forLoading) {
+  const items = [];
+  for (let i = 1; i <= SLOT_COUNT; i++) {
+    const st = readKey(slotKey(i));
+    const summary = st && st.dead ? `${esc(st.dead.reason)}` : esc(slotSummary(st));
+    let btn = '';
+    if (forLoading) btn = st && !st.dead ? `<button data-action="loadslot" data-arg="${i}" data-key="loadslot-${i}" aria-label="Load slot ${i}">Load</button>` : '';
+    else btn = `<button data-action="saveslot" data-arg="${i}" data-key="saveslot-${i}" aria-label="${ui.confirmSlot === i ? `Confirm overwrite slot ${i}` : `Save to slot ${i}`}">${ui.confirmSlot === i ? 'Confirm overwrite' : 'Save here'}</button>`;
+    items.push(`<li><p>Slot ${i}: ${summary}.</p>${btn}</li>`);
+  }
+  return `<ul class="cards">${items.join('')}</ul>`;
 }
 
 function leaveCombat() {
@@ -1027,14 +1183,17 @@ function titleHTML() {
   }
   const warn = saved && ui.confirmNew
     ? `<p role="alert">Starting a new campaign will replace your saved one. Press Start again to confirm.</p>` : '';
+  let slots = '';
+  for (let i = 1; i <= SLOT_COUNT; i++) if (readKey(slotKey(i))) { slots = `<section aria-labelledby="h-slots"><h2 id="h-slots">Saved games</h2>${slotsHTML(true)}</section>`; break; }
   return `<h1 id="title-heading" tabindex="-1">Hull and Honor</h1>
     <p>Trade, smuggle, raid or hunt pirates across a lawless galaxy. Your reputation decides who welcomes you and who wants you dead.</p>
-    ${cont}
+    ${cont}${slots}
     <section aria-labelledby="h-new"><h2 id="h-new">New campaign</h2>
       <form id="new-form">
         <p><label for="f-captain">Captain name</label><br><input id="f-captain" name="captain" autocomplete="off" maxlength="30"></p>
         <p><label for="f-ship">Ship name</label><br><input id="f-ship" name="ship" autocomplete="off" maxlength="30"></p>
         <p><label for="f-seed">Galaxy seed (optional)</label><br><input id="f-seed" name="seed" autocomplete="off" maxlength="30"></p>
+        <p><input type="checkbox" id="f-ironman" name="ironman"> <label for="f-ironman">One life mode: no saved games or reloads. Death ends the campaign for good.</label></p>
         ${warn}
         <button type="submit" data-key="start">Start</button>
       </form></section>`;
@@ -1072,6 +1231,7 @@ function statusHTML() {
     <li>Hull: ${state.ship.hull} of ${state.ship.hullMax}</li>
     <li>Systems: ${systemsText(state.ship)}</li>
     <li>Crew: ${state.ship.crew} of ${state.ship.crewMax}</li>
+    <li>Insurance: ${state.insurance.plan === 'none' ? 'none' : `${INSURANCE[state.insurance.plan].name.toLowerCase()} until day ${state.insurance.expires}`}${state.debt ? `. Guild debt ${state.debt}` : ''}</li>
     ${course}</ul></section>`;
 }
 
@@ -1254,7 +1414,8 @@ function gameOverHTML() {
   const backup = (() => { try { return localStorage.getItem(PREFIGHT_KEY); } catch (e) { return null; } })();
   return `<h1 id="over-heading" tabindex="-1">Game over</h1>
     <p>${esc(state.dead.reason)}</p>
-    ${backup ? '<button data-action="reloadfight" data-key="reloadfight">Reload from before the fight</button>' : ''}
+    ${state.ironman ? '<p>This was a one life campaign. It has ended for good.</p>' : `${backup ? '<button data-action="reloadfight" data-key="reloadfight">Reload from before the fight</button>' : ''}
+    <h2>Saved games</h2>${slotsHTML(true)}`}
     <button data-action="title" data-key="title">Return to title screen</button>`;
 }
 
@@ -1335,6 +1496,32 @@ function priceNotesHTML() {
 function logHTML() {
   const items = state.log.slice(0, 15).map(e => `<li>Day ${e.day}: ${esc(e.msg)}</li>`).join('');
   return `<section id="sec-log" aria-labelledby="h-log"><h2 id="h-log" tabindex="-1">Captain's log</h2><ul>${items}</ul></section>`;
+}
+
+function insuranceHTML() {
+  const ins = state.insurance;
+  const sold = offices(here()).includes('guild');
+  const current = ins.plan !== 'none'
+    ? `${INSURANCE[ins.plan].name}, covered until day ${ins.expires} (${plural(Math.max(0, ins.expires - state.day), 'day')} left).`
+    : 'You are not insured. If your ship is destroyed, a battered Mule costs you ' + UNINSURED_COST + ' credits.';
+  let plans = '';
+  if (sold) {
+    plans = Object.entries(INSURANCE).map(([id, pl]) => {
+      const q = insuranceQuote(id);
+      if (q.denied) return `<li>${pl.name}: ${esc(q.denied)}</li>`;
+      const label = ins.plan === id ? 'Extend 30 days' : 'Buy 30 days';
+      return `<li><p>${pl.name}: replaces your ship with ${pl.desc}. Deductible ${pl.deductible}. Premium ${q.premium} for 30 days.</p>
+        <button data-action="insure" data-arg="${id}" data-key="insure-${id}" aria-label="${label} of ${pl.name.toLowerCase()}">${label}</button></li>`;
+    }).join('');
+    plans = `<ul class="cards">${plans}</ul><p>Premiums are based on your ship's value. Past claims, notoriety and trouble with the Concord raise them. Losses during piracy are never covered. Changing plans replaces your current one.</p>`;
+  } else {
+    plans = '<p>Insurance is sold at Merchant Guild offices, not here.</p>';
+  }
+  const debt = state.debt
+    ? `<p>You owe the Merchant Guild ${state.debt} credits, growing half a percent a day. Half of every contract payment goes to it, and you cannot buy ships until it is paid.</p>
+       ${sold ? `<button data-action="repaydebt" data-key="repaydebt">Repay ${Math.min(state.debt, state.credits)} credits</button>` : ''}` : '';
+  return `<section id="sec-insurance" aria-labelledby="h-insurance"><h2 id="h-insurance" tabindex="-1">Insurance</h2>
+    <p>${current}</p>${debt}${plans}</section>`;
 }
 
 function crewHTML() {
@@ -1426,12 +1613,13 @@ function gameHTML() {
   switch (ui.view) {
     case 'contracts': view = contractsHTML(); break;
     case 'market': view = isDocked ? `${marketHTML()}${priceNotesHTML()}` : `${refusedHTML()}${priceNotesHTML()}`; break;
-    case 'shipyard': view = isDocked ? `${servicesHTML()}${outfittingHTML()}${dealerHTML()}` : refusedHTML(); break;
+    case 'shipyard': view = isDocked ? `${servicesHTML()}${insuranceHTML()}${outfittingHTML()}${dealerHTML()}` : refusedHTML(); break;
     case 'crew': view = crewHTML(); break;
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
-      <p>Your campaign saves automatically.</p>
-      <button data-action="title" data-key="title">Return to title screen</button></section>`; break;
+      <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
+      <button data-action="title" data-key="title">Return to title screen</button></section>
+      ${state.ironman ? '' : `<section id="sec-saves" aria-labelledby="h-saves"><h2 id="h-saves" tabindex="-1">Saved games</h2>${slotsHTML(false)}</section>`}`; break;
     default: view = `${isDocked ? '' : refusedHTML()}${statusHTML()}${travelHTML()}${courseHTML()}`;
   }
   return `<h1 id="sys-heading" tabindex="-1">${esc(sys.name)}</h1>
@@ -1485,13 +1673,17 @@ app.addEventListener('click', e => {
     case 'repairsys': repairSystems(); break;
     case 'hirecrew': crewAction('hire'); break;
     case 'crew': crewAction(arg); break;
-    case 'view': ui.view = arg; ui.confirmBuyShip = null; ui.focus = 'view-first'; render(); break;
+    case 'view': ui.view = arg; ui.confirmBuyShip = null; ui.confirmSlot = null; ui.focus = 'view-first'; render(); break;
     case 'buyweapon': buyWeapon(arg); break;
     case 'sellweapon': sellWeapon(Number(arg)); break;
     case 'upgrade': installUpgrade(arg); break;
     case 'removeupgrade': removeUpgrade(arg); break;
     case 'buyship': buyShip(arg); break;
     case 'mutiny': resolveMutiny(arg); break;
+    case 'insure': buyInsurance(arg); break;
+    case 'repaydebt': repayDebt(); break;
+    case 'saveslot': saveToSlot(Number(arg)); break;
+    case 'loadslot': loadSlot(Number(arg)); break;
     case 'missiles': buyMissiles(); break;
     case 'c-attack': attackMerchant(); break;
     case 'c-ignore': ignoreEncounter(); break;
@@ -1530,15 +1722,16 @@ app.addEventListener('submit', e => {
   if (f.id !== 'new-form') return;
   if (loadSave() && !ui.confirmNew) {
     ui.confirmNew = true;
-    const vals = { c: f.captain.value, s: f.ship.value, d: f.seed.value };
+    const vals = { c: f.captain.value, s: f.ship.value, d: f.seed.value, i: f.ironman.checked };
     render();
     document.getElementById('f-captain').value = vals.c;
     document.getElementById('f-ship').value = vals.s;
     document.getElementById('f-seed').value = vals.d;
+    document.getElementById('f-ironman').checked = vals.i;
     app.querySelector('[data-key="start"]').focus();
     return;
   }
-  newGame(f.captain.value.trim(), f.ship.value.trim(), f.seed.value.trim());
+  newGame(f.captain.value.trim(), f.ship.value.trim(), f.seed.value.trim(), f.ironman.checked);
 });
 
 render();

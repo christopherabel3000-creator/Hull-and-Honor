@@ -99,6 +99,18 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **Experience:** each victory makes the crew slightly better in boarding fights; new hires dilute it. Crew below 40 loyalty fight worse.
 - **Desertion and mutiny:** below 30 loyalty, a fifth of the crew deserts at each port. Below 15, each jump has a 40% chance of mutiny: pay them off (150 per crew), fight (losing kills you), or give up command (game over).
 
+## Stage 5 details (as built)
+
+- **Insurance** is sold at Merchant Guild offices (Concord and independent ports) in 30-day policies:
+  - Basic (3% of ship value): a used Mule plus half your ship's value in credits; deductible 500.
+  - Full (6%): a new ship of the same class with the same weapons, no upgrades; deductible 1,000.
+  - Premium (9%): same class, weapons and upgrades; deductible 1,500.
+  - Premiums rise 25% per past claim, 30% at notoriety 25+, 50% when Disliked or worse by the Concord, and drop 20% when the Guild Trusts you. The Guild refuses if it is Hostile; nobody insures a captain the Concord hates. Policies lapse when their term ends. Losses during piracy (attacking merchants or raid contracts) are never covered.
+- **Uninsured loss:** a battered Mule at half hull for 3,000 credits.
+- **Guild debt:** anything you can't pay becomes debt to the Merchant Guild at 0.5% a day. Half of every payment you receive goes to it, and ship dealers won't sell to you until it's paid. Repay at any Guild office.
+- **Saving:** autosave plus 3 manual save slots (Records view; overwriting asks to confirm). Saved games can be loaded from the title screen and the game over screen.
+- **One life mode** (chosen at the start): no save slots and no reloading from before a fight. Death ends the campaign for good.
+
 ## Story arcs (triggered by reputation)
 
 - **Navy hero**: offered a commission; pulled into hunting the region's biggest pirate lord.
@@ -152,7 +164,6 @@ Several arcs can be active in one campaign, and they can clash.
 
 ## Open questions
 
-- Number of save slots, and whether there's an optional "one life" mode.
 - Time pressure: does in-game time matter (deadlines, aging galaxy events)?
 - Economy depth: how prices react to your own trading.
 - Name check for conflicts (itch.io, Steam, App Store).
@@ -163,6 +174,6 @@ Several arcs can be active in one campaign, and they can clash.
 2. Ports, missions and reputation. **(Built)**
 3. Combat. **(Built)**
 4. Ships, outfitting, crew and loyalty. **(Built)**
-5. Insurance, death and saving.
+5. Insurance, death and saving. **(Built)**
 6. Story arcs.
 7. Balance and polish.
