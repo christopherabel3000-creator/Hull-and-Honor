@@ -11,6 +11,8 @@ export const GOODS = [
   { id: 'medicine', name: 'Medicine', base: 150 },
   { id: 'electronics', name: 'Electronics', base: 180 },
   { id: 'luxuries', name: 'Luxury goods', base: 290 },
+  { id: 'weapons', name: 'Illegal weapons', base: 240, illegal: true },
+  { id: 'blacktech', name: 'Black-market tech', base: 320, illegal: true },
 ];
 
 export const ECONOMIES = {
@@ -92,7 +94,7 @@ export function generateGalaxy(seed) {
     else authority = region.clan + ' clan';
     const economy = weighted(rng, ECON_WEIGHTS[region.kind]);
     const priceFactor = {};
-    for (const g of GOODS) priceFactor[g.id] = 0.9 + rng() * 0.2;
+    for (const g of GOODS) priceFactor[g.id] = g.illegal ? 1 : 0.9 + rng() * 0.2;
     return { id: i, name: makeName(rng, used), x: p.x, y: p.y, region: region.id, security, authority, economy, priceFactor };
   });
 
@@ -136,6 +138,20 @@ export function generateGalaxy(seed) {
   }
   const adj = buildAdj();
   for (const list of adj) list.sort((a, b) => a.ly - b.ly);
+
+  // Each system's nearest pirate clan (their own clan in lawless space).
+  const lawless = regions.filter(r => r.kind === 'lawless');
+  for (const sys of systems) {
+    const reg = regions[sys.region];
+    if (reg.kind === 'lawless') { sys.clan = reg.clan; continue; }
+    let best = null;
+    for (const r of lawless) {
+      const cx = (r.id % 3) * (SIZE / 3) + SIZE / 6, cy = Math.floor(r.id / 3) * (SIZE / 3) + SIZE / 6;
+      const d = Math.hypot(sys.x - cx, sys.y - cy);
+      if (!best || d < best.d) best = { d, clan: r.clan };
+    }
+    sys.clan = best.clan;
+  }
 
   const coreHigh = systems.filter(s => regions[s.region].kind === 'core' && s.security === 'high');
   const start = (coreHigh.length ? pick(rng, coreHigh) : systems[0]).id;

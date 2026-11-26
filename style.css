@@ -5,9 +5,9 @@ h1 { font-size: 1.7rem; margin: 0.5rem 0; }
 h2 { font-size: 1.3rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid #2a3550; }
 h3 { font-size: 1.05rem; }
 ul { padding-left: 1.2rem; }
-ul.goods { list-style: none; padding: 0; }
-ul.goods li { padding: 0.5rem 0; border-bottom: 1px solid #1c2640; }
-ul.goods p { margin: 0 0 0.3rem; }
+ul.cards { list-style: none; padding: 0; }
+ul.cards li { padding: 0.5rem 0; border-bottom: 1px solid #1c2640; }
+ul.cards p { margin: 0 0 0.3rem; }
 button { font: inherit; background: #1f3a66; color: #fff; border: 1px solid #4a6fa8; border-radius: 6px;
   padding: 0.5rem 0.8rem; margin: 0.15rem 0.2rem 0.15rem 0; min-height: 44px; cursor: pointer; text-align: left; }
 button:hover, button:focus { background: #2b4f8a; outline: 2px solid #9cc2ff; outline-offset: 1px; }

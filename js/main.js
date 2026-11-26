@@ -1,5 +1,13 @@
 import { generateGalaxy, GOODS, ECONOMIES, SECURITY_NAMES, jumpCost, shortestPath, hopCounts } from './galaxy.js';
-import { sysState, refreshMarket, prices, nudge, recordNotes, tradeTag, fuelPrice } from './economy.js';
+import { sysState, refreshMarket, prices, nudge, recordNotes, tradeTag, fuelPrice, hasBlackMarket } from './economy.js';
+import {
+  ensureRep, factionKeys, getRep, changeRep, changeLocal, tierName, accessTier, factionName, TIER_REQUIREMENT,
+  addNotoriety, notorietyName, dockingStatus, clanKey,
+} from './reputation.js';
+import {
+  MAX_ACTIVE, BOARD_REFRESH_DAYS, offices, officeName, officeFaction, missionSpace, isContraband,
+  generateBoard, canTake, missionTitle,
+} from './missions.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const STARTER_SHIP = { cls: 'Mule-class light freighter', cargo: 20, tank: 12 };
@@ -9,11 +17,12 @@ const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
-const ui = { screen: 'title', confirmNew: false, priceGood: 'food', plotSelect: null, focus: null };
+const ui = { screen: 'title', confirmNew: false, confirmAbandon: null, priceGood: 'food', plotSelect: null, focus: null };
 
 // ---------- helpers ----------
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const good = id => GOODS.find(g => g.id === id);
 
 function announce(msg) {
   live.textContent = '';
@@ -34,8 +43,11 @@ function loadSave() {
 }
 
 const here = () => galaxy.systems[state.location];
-const cargoUsed = () => Object.values(state.cargo).reduce((s, c) => s + c.qty, 0);
+const cargoOnly = () => Object.values(state.cargo).reduce((s, c) => s + c.qty, 0);
+const holdUsed = () => cargoOnly() + state.missions.reduce((s, m) => s + missionSpace(m), 0);
+const freeSpace = () => state.ship.cargo - holdUsed();
 const regionOf = sys => galaxy.regions[sys.region];
+const docked = () => dockingStatus(state, here()).ok;
 function describeSystem(sys) {
   return `${regionOf(sys).name}, ${SECURITY_NAMES[sys.security]}, ${sys.authority}, ${ECONOMIES[sys.economy].name.toLowerCase()} economy`;
 }
@@ -43,17 +55,95 @@ function coursePath() {
   if (state.course == null || state.course === state.location) return null;
   return shortestPath(galaxy, state.location, state.course);
 }
+function carryingContraband() {
+  return GOODS.some(g => g.illegal && state.cargo[g.id]) || state.missions.some(isContraband);
+}
+function getBoard(sys) {
+  const s = sysState(state, sys.id);
+  if (!s.board || state.day - s.board.day >= BOARD_REFRESH_DAYS) {
+    s.board = { day: state.day, missions: generateBoard(state, galaxy, sys) };
+  }
+  return s.board.missions;
+}
+
+// ---------- contracts ----------
+function completeMission(m, msgs) {
+  state.missions = state.missions.filter(x => x !== m);
+  state.credits += m.pay;
+  msgs.push(`Contract complete: ${missionTitle(m, galaxy)}. Paid ${m.pay} credits.`);
+  if (m.type === 'smuggle') {
+    changeRep(state, m.faction, 4 + m.tier, msgs);
+    for (const k of factionKeys(state)) if (k.startsWith('clan:') && k !== m.faction) changeRep(state, k, 1, msgs);
+    if (galaxy.systems[m.dest].authority !== 'Concord') changeLocal(state, galaxy, m.dest, 2, msgs);
+    addNotoriety(state, 1);
+  } else if (m.type === 'dispatch') {
+    changeRep(state, 'concord', 3 + m.tier, msgs);
+    for (const k of factionKeys(state)) if (k.startsWith('clan:')) changeRep(state, k, -1, msgs);
+    changeLocal(state, galaxy, m.dest, 3, msgs);
+  } else {
+    changeRep(state, 'guild', 3 + m.tier, msgs);
+    changeLocal(state, galaxy, m.dest, 3, msgs);
+    if (m.origin !== m.dest) changeLocal(state, galaxy, m.origin, 1, msgs);
+  }
+  if (m.tier >= 2) addNotoriety(state, m.tier - 1);
+  log(`Completed: ${missionTitle(m, galaxy)} (${m.pay} credits).`);
+}
+
+function failMission(m, msgs, reason, penalty = 6 + m.tier) {
+  state.missions = state.missions.filter(x => x !== m);
+  msgs.push(`Contract failed, ${reason}: ${missionTitle(m, galaxy)}.`);
+  changeRep(state, m.faction, -penalty, msgs);
+  changeLocal(state, galaxy, m.origin, -4, msgs);
+  log(`Failed (${reason}): ${missionTitle(m, galaxy)}.`);
+}
+
+function checkDeadlines(msgs) {
+  for (const m of [...state.missions]) if (state.day > m.deadline) failMission(m, msgs, 'deadline missed');
+}
+
+function autoDeliver(msgs) {
+  for (const m of [...state.missions]) {
+    if (m.dest === state.location && m.type !== 'procure') completeMission(m, msgs);
+  }
+}
+
+function customsScan(sys, msgs) {
+  if (sys.authority !== 'Concord' || !carryingContraband()) return;
+  const chance = sys.security === 'high' ? 0.45 : 0.25;
+  if (Math.random() >= chance) {
+    msgs.push('Customs waved you through.');
+    return;
+  }
+  let value = 0;
+  for (const g of GOODS) {
+    if (g.illegal && state.cargo[g.id]) {
+      value += state.cargo[g.id].qty * g.base;
+      delete state.cargo[g.id];
+    }
+  }
+  const seized = state.missions.filter(isContraband);
+  for (const m of seized) value += m.units * 200;
+  const fine = Math.min(state.credits, Math.round(value * 1.5));
+  state.credits -= fine;
+  msgs.push(`Customs scan! Your contraband was found and seized. Fined ${fine} credits.`);
+  log(`Caught by customs at ${sys.name}. Fined ${fine} credits.`);
+  changeRep(state, 'concord', -8, msgs);
+  changeLocal(state, galaxy, sys.id, -10, msgs);
+  addNotoriety(state, 3);
+  for (const m of seized) failMission(m, msgs, 'cargo seized', 4);
+}
 
 // ---------- game actions ----------
 function newGame(captain, ship, seedText) {
   const seed = seedText || String(Math.floor(Math.random() * 1e9));
   galaxy = generateGalaxy(seed);
   state = {
-    version: 1, seed, day: 1, credits: 1500,
+    version: 2, seed, day: 1, credits: 1500,
     captain: captain || 'Captain', shipName: ship || 'Wayfarer',
     ship: { ...STARTER_SHIP }, fuel: STARTER_SHIP.tank,
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
   };
+  ensureRep(state, galaxy);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
   save();
@@ -68,6 +158,7 @@ function continueGame() {
   if (!saved) return;
   state = saved;
   galaxy = generateGalaxy(state.seed);
+  ensureRep(state, galaxy);
   refreshMarket(state, state.location);
   ui.screen = 'game';
   ui.focus = 'sys-heading';
@@ -79,15 +170,15 @@ function arrive(id) {
   const s = sysState(state, id);
   s.visited = true;
   refreshMarket(state, id);
-  recordNotes(state, galaxy.systems[id]);
+  if (dockingStatus(state, galaxy.systems[id]).ok) recordNotes(state, galaxy.systems[id]);
 }
 
 function buy(goodId, max) {
   const sys = here();
-  const g = GOODS.find(x => x.id === goodId);
+  const g = good(goodId);
   let bought = 0, spent = 0;
   for (;;) {
-    if (cargoUsed() >= state.ship.cargo) break;
+    if (freeSpace() <= 0) break;
     const p = prices(state, sys, g).buy;
     if (state.credits < p) break;
     state.credits -= p;
@@ -100,19 +191,19 @@ function buy(goodId, max) {
     if (!max) break;
   }
   if (!bought) {
-    announce(cargoUsed() >= state.ship.cargo ? 'Your hold is full.' : 'Not enough credits.');
+    announce(freeSpace() <= 0 ? 'Your hold is full.' : 'Not enough credits.');
     return;
   }
   recordNotes(state, sys);
   log(`Bought ${bought} ${g.name} for ${spent} credits at ${sys.name}.`);
   save();
   render();
-  announce(`Bought ${bought} ${g.name} for ${spent}. Credits ${state.credits}. Hold ${cargoUsed()} of ${state.ship.cargo}.`);
+  announce(`Bought ${bought} ${g.name} for ${spent}. Credits ${state.credits}. Hold ${holdUsed()} of ${state.ship.cargo}.`);
 }
 
 function sell(goodId, all) {
   const sys = here();
-  const g = GOODS.find(x => x.id === goodId);
+  const g = good(goodId);
   const c = state.cargo[goodId];
   if (!c || !c.qty) return;
   let sold = 0, earned = 0, costBasis = 0;
@@ -137,8 +228,8 @@ function sell(goodId, all) {
   announce(`Sold ${sold} ${g.name} for ${earned}, ${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}. Credits ${state.credits}.`);
 }
 
-function refuel(full) {
-  const price = fuelPrice(here());
+function refuel(full, emergency) {
+  const price = fuelPrice(here()) * (emergency ? 3 : 1);
   let units = 0;
   while (state.fuel < state.ship.tank && state.credits >= price) {
     state.fuel++;
@@ -166,29 +257,88 @@ function jump(to) {
   const from = here();
   state.fuel -= cost.fuel;
   state.day += cost.days;
+  ui.confirmAbandon = null;
+  const msgs = [];
+  checkDeadlines(msgs);
   arrive(to);
   const sys = here();
-  let msg = `Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`;
+  msgs.unshift(`Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`);
+  log(`Jumped from ${from.name} to ${sys.name}.`);
+  const dock = dockingStatus(state, sys);
+  if (!dock.ok) {
+    msgs.push(dock.reason);
+  } else {
+    customsScan(sys, msgs);
+    if (dockingStatus(state, sys).ok) {
+      autoDeliver(msgs);
+      recordNotes(state, sys);
+    }
+  }
   if (state.course === to) {
     state.course = null;
-    msg += ' Destination reached.';
+    msgs.push('Destination reached.');
   }
-  log(`Jumped from ${from.name} to ${sys.name}.`);
   save();
   ui.focus = 'sys-heading';
   render();
-  announce(msg);
+  announce(msgs.join(' '));
 }
 
-function plotCourse() {
-  const dest = Number(ui.plotSelect);
-  if (Number.isNaN(dest) || ui.plotSelect == null) { announce('Choose a destination first.'); return; }
+function plotTo(dest) {
   if (dest === state.location) { announce('You are already there.'); return; }
   state.course = dest;
+  ui.plotSelect = String(dest);
   save();
   render();
   const path = coursePath();
   announce(`Course plotted to ${galaxy.systems[dest].name}: ${plural(path.length - 1, 'jump')}. Next jump: ${galaxy.systems[path[1]].name}.`);
+}
+
+function acceptMission(id) {
+  const board = getBoard(here());
+  const m = board.find(x => x.id === id);
+  if (!m) return;
+  if (!canTake(state, m)) { announce(`You need ${TIER_REQUIREMENT[m.tier]} standing with the ${factionName(m.faction)}.`); return; }
+  if (state.missions.length >= MAX_ACTIVE) { announce(`You can hold at most ${MAX_ACTIVE} contracts at once.`); return; }
+  if (missionSpace(m) > freeSpace()) { announce(`Not enough hold space. This contract needs ${missionSpace(m)}, you have ${freeSpace()} free.`); return; }
+  sysState(state, state.location).board.missions = board.filter(x => x !== m);
+  state.missions.push(m);
+  log(`Accepted: ${missionTitle(m, galaxy)} (${m.pay} credits, due day ${m.deadline}).`);
+  save();
+  render();
+  announce(`Accepted: ${missionTitle(m, galaxy)}. Due day ${m.deadline}.`);
+}
+
+function deliverProcurement(id) {
+  const m = state.missions.find(x => x.id === id);
+  if (!m || m.dest !== state.location) return;
+  const c = state.cargo[m.goodId];
+  if (!c || c.qty < m.units) { announce(`You need ${m.units} ${good(m.goodId).name} in your hold.`); return; }
+  c.cost -= (c.cost / c.qty) * m.units;
+  c.qty -= m.units;
+  if (c.qty <= 0) delete state.cargo[m.goodId];
+  const msgs = [];
+  completeMission(m, msgs);
+  save();
+  render();
+  announce(msgs.join(' '));
+}
+
+function abandonMission(id) {
+  const m = state.missions.find(x => x.id === id);
+  if (!m) return;
+  if (ui.confirmAbandon !== id) {
+    ui.confirmAbandon = id;
+    render();
+    announce(`Abandoning costs standing with the ${factionName(m.faction)}. Press Confirm abandon to continue.`);
+    return;
+  }
+  ui.confirmAbandon = null;
+  const msgs = [];
+  failMission(m, msgs, 'abandoned');
+  save();
+  render();
+  announce(msgs.join(' '));
 }
 
 // ---------- rendering ----------
@@ -216,6 +366,17 @@ function titleHTML() {
       </form></section>`;
 }
 
+function holdContents() {
+  const parts = [];
+  for (const g of GOODS) if (state.cargo[g.id]) parts.push(`${g.name} ${state.cargo[g.id].qty}`);
+  for (const m of state.missions) {
+    if (m.type === 'freight') parts.push(`Guild freight ${m.units}`);
+    if (m.type === 'dispatch') parts.push('Concord dispatches 1');
+    if (m.type === 'smuggle') parts.push(`Contraband crates ${m.units}`);
+  }
+  return parts.length ? parts.join(', ') : 'empty';
+}
+
 function statusHTML() {
   const path = coursePath();
   let course = '<li>No course plotted.</li>';
@@ -232,14 +393,66 @@ function statusHTML() {
     <li>Day ${state.day}</li>
     <li>Credits: ${state.credits}</li>
     <li>Fuel: ${state.fuel} of ${state.ship.tank}</li>
-    <li>Hold: ${cargoUsed()} of ${state.ship.cargo}</li>
+    <li>Hold: ${holdUsed()} of ${state.ship.cargo}: ${holdContents()}</li>
     <li>Ship: the ${esc(state.shipName)}, ${state.ship.cls}</li>
     ${course}</ul></section>`;
 }
 
+function missionDetails(m, hops) {
+  const dest = galaxy.systems[m.dest];
+  const left = m.deadline - state.day;
+  const due = left === 0 ? 'due today' : `due day ${m.deadline}, ${plural(left, 'day')} left`;
+  const where = m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away, ${dest.authority}`;
+  const space = missionSpace(m) ? `, takes ${missionSpace(m)} hold space` : '';
+  const risk = m.type === 'smuggle' && dest.authority === 'Concord' ? ', customs risk at destination' : '';
+  return `${missionTitle(m, galaxy)} (${where}). For the ${factionName(m.faction)}. Pays ${m.pay}, ${due}${space}${risk}.`;
+}
+
+function contractsHTML() {
+  const sys = here();
+  const hops = hopCounts(galaxy, state.location);
+  const isDocked = docked();
+  const active = state.missions.map(m => {
+    const btns = [];
+    if (m.dest !== state.location) btns.push(`<button data-action="plotto" data-arg="${m.dest}" data-key="plotto-${m.id}">Plot course to ${esc(galaxy.systems[m.dest].name)}</button>`);
+    if (m.type === 'procure' && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
+    const confirm = ui.confirmAbandon === m.id;
+    btns.push(`<button data-action="abandon" data-arg="${m.id}" data-key="abandon-${m.id}">${confirm ? 'Confirm abandon' : 'Abandon'}</button>`);
+    return `<li><p>${missionDetails(m, hops)}</p>${btns.join(' ')}</li>`;
+  }).join('');
+  let boards = '';
+  if (isDocked) {
+    const board = getBoard(sys);
+    for (const office of offices(sys)) {
+      const faction = officeFaction(office, sys);
+      const rep = getRep(state, faction);
+      const mine = board.filter(m => m.office === office);
+      let body;
+      if (accessTier(rep) < 0) {
+        body = `<p>The ${factionName(faction)} won't offer you work while you are ${tierName(rep)}.</p>`;
+      } else {
+        const open = mine.filter(m => canTake(state, m));
+        const locked = mine.filter(m => !canTake(state, m));
+        const items = open.map(m => `<li><p>${missionDetails(m, hops)}</p><button data-action="accept" data-arg="${m.id}" data-key="accept-${m.id}">Accept</button></li>`).join('');
+        body = open.length ? `<ul class="cards">${items}</ul>` : '<p>No contracts available for you right now.</p>';
+        if (locked.length) {
+          const need = TIER_REQUIREMENT[Math.min(...locked.map(m => m.tier))];
+          body += `<p>${locked.length === 1 ? '1 more contract needs' : `${locked.length} more contracts need`} higher standing, starting at ${need}.</p>`;
+        }
+      }
+      boards += `<h3>${officeName(office, sys)}</h3>${body}`;
+    }
+    boards += `<p>New contracts are posted every ${BOARD_REFRESH_DAYS} days.</p>`;
+  }
+  return `<section id="sec-contracts" aria-labelledby="h-contracts"><h2 id="h-contracts" tabindex="-1">Contracts</h2>
+    <h3>Your contracts, ${state.missions.length} of ${MAX_ACTIVE}</h3>
+    ${active ? `<ul class="cards">${active}</ul>` : '<p>None.</p>'}
+    ${boards}</section>`;
+}
+
 function marketHTML() {
   const sys = here();
-  const items = GOODS.map(g => {
+  const items = GOODS.filter(g => !g.illegal || hasBlackMarket(sys)).map(g => {
     const p = prices(state, sys, g);
     const tag = tradeTag(sys, g);
     const c = state.cargo[g.id];
@@ -252,8 +465,9 @@ function marketHTML() {
       <button data-action="buymax" data-arg="${g.id}" data-key="buymax-${g.id}" aria-label="Buy max ${g.name}">Buy max</button>
       ${sellBtns}</li>`;
   }).join('');
+  const note = hasBlackMarket(sys) ? '' : '<p>Contraband cannot be traded in Concord ports.</p>';
   return `<section id="sec-market" aria-labelledby="h-market"><h2 id="h-market" tabindex="-1">Market</h2>
-    <ul class="goods">${items}</ul></section>`;
+    ${note}<ul class="cards">${items}</ul></section>`;
 }
 
 function servicesHTML() {
@@ -263,6 +477,14 @@ function servicesHTML() {
     <p>Fuel costs ${price} credits per unit here.</p>
     <button data-action="refuel" data-key="refuel">Refuel to full${need ? `, ${need * price} credits` : ''}</button>
     <button data-action="fuel1" data-key="fuel1">Buy 1 fuel</button></section>`;
+}
+
+function refusedHTML() {
+  const price = fuelPrice(here()) * 3;
+  return `<section id="sec-refused" aria-labelledby="h-refused"><h2 id="h-refused" tabindex="-1">Docking refused</h2>
+    <p>${esc(dockingStatus(state, here()).reason)} You can't trade, refuel or take contracts here.</p>
+    <p>A passing trader will sell you emergency fuel at ${price} credits per unit.</p>
+    <button data-action="emergencyfuel" data-key="emergencyfuel">Buy 1 emergency fuel</button></section>`;
 }
 
 function travelHTML() {
@@ -277,10 +499,23 @@ function travelHTML() {
     const c = jumpCost(l.ly, state.ship.tank);
     const visited = state.systems[l.to]?.visited ? ', visited' : '';
     const onCourse = l.to === next ? ', on your course' : '';
-    return `<li><button data-action="jump" data-arg="${l.to}" data-key="jump-${l.to}">${esc(s.name)}: ${l.ly} light-years, ${c.fuel} fuel, ${plural(c.days, 'day')}. ${describeSystem(s)}${visited}${onCourse}</button></li>`;
+    const contract = state.missions.some(m => m.dest === l.to) ? ', contract destination' : '';
+    return `<li><button data-action="jump" data-arg="${l.to}" data-key="jump-${l.to}">${esc(s.name)}: ${l.ly} light-years, ${c.fuel} fuel, ${plural(c.days, 'day')}. ${describeSystem(s)}${visited}${onCourse}${contract}</button></li>`;
   }).join('');
   return `<section id="sec-travel" aria-labelledby="h-travel"><h2 id="h-travel" tabindex="-1">Travel</h2>
     ${nextBtn}<h3>Jump lanes from here</h3><ul>${lanes}</ul></section>`;
+}
+
+function reputationHTML() {
+  const items = factionKeys(state).map(k => {
+    const v = getRep(state, k);
+    return `<li>${factionName(k)}: ${tierName(v)}, ${Math.round(v)}</li>`;
+  }).join('');
+  const local = sysState(state, state.location).local;
+  return `<section id="sec-rep" aria-labelledby="h-rep"><h2 id="h-rep" tabindex="-1">Reputation</h2>
+    <ul>${items}
+    <li>Local standing at ${esc(here().name)}: ${tierName(local)}, ${Math.round(local)}</li>
+    <li>Notoriety: ${notorietyName(state.notoriety)}, ${Math.round(state.notoriety)}</li></ul></section>`;
 }
 
 function courseHTML() {
@@ -297,7 +532,7 @@ function courseHTML() {
 }
 
 function priceNotesHTML() {
-  const g = GOODS.find(x => x.id === ui.priceGood);
+  const g = good(ui.priceGood);
   const hops = hopCounts(galaxy, state.location);
   const rows = Object.entries(state.systems)
     .filter(([, s]) => s.notes && s.notes[g.id])
@@ -315,7 +550,7 @@ function priceNotesHTML() {
   return `<section id="sec-notes" aria-labelledby="h-notes"><h2 id="h-notes" tabindex="-1">Price notes</h2>
     <p>Last known prices at systems you have visited, best selling price first.</p>
     <p><label for="notes-select">Good</label><br><select id="notes-select" data-change="pricegood" data-key="pricegood">${opts}</select></p>
-    <ul>${rows}</ul></section>`;
+    ${rows ? `<ul>${rows}</ul>` : '<p>No prices noted yet.</p>'}</section>`;
 }
 
 function logHTML() {
@@ -325,9 +560,10 @@ function logHTML() {
 
 function gameHTML() {
   const sys = here();
+  const port = docked() ? `${contractsHTML()}${marketHTML()}${servicesHTML()}` : `${refusedHTML()}${contractsHTML()}`;
   return `<h1 id="sys-heading" tabindex="-1">${esc(sys.name)}</h1>
     <p>${describeSystem(sys)}.</p>
-    ${statusHTML()}${travelHTML()}${marketHTML()}${servicesHTML()}${courseHTML()}${priceNotesHTML()}${logHTML()}
+    ${statusHTML()}${travelHTML()}${port}${reputationHTML()}${courseHTML()}${priceNotesHTML()}${logHTML()}
     <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.</p>
       <button data-action="title" data-key="title">Return to title screen</button></section>`;
@@ -338,6 +574,7 @@ function render() {
   const key = active && active.dataset ? active.dataset.key : null;
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
+  if (ui.screen === 'game') save();
   app.innerHTML = ui.screen === 'title' ? titleHTML() : gameHTML();
   let target = null;
   if (ui.focus) { target = document.getElementById(ui.focus); ui.focus = null; }
@@ -362,9 +599,14 @@ app.addEventListener('click', e => {
     case 'sellall': sell(arg, true); break;
     case 'refuel': refuel(true); break;
     case 'fuel1': refuel(false); break;
+    case 'emergencyfuel': refuel(false, true); break;
     case 'jump': jump(Number(arg)); break;
-    case 'plot': plotCourse(); break;
+    case 'plot': plotTo(Number(ui.plotSelect)); break;
+    case 'plotto': plotTo(Number(arg)); break;
     case 'clearcourse': state.course = null; save(); render(); announce('Course cleared.'); break;
+    case 'accept': acceptMission(Number(arg)); break;
+    case 'deliver': deliverProcurement(Number(arg)); break;
+    case 'abandon': abandonMission(Number(arg)); break;
     case 'title': ui.screen = 'title'; ui.confirmNew = false; ui.focus = 'title-heading'; render(); break;
   }
 });

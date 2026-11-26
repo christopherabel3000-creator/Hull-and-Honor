@@ -52,6 +52,20 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - Failing a mission costs reputation with whoever gave it.
 - **Conflict missions:** some jobs force a choice between factions (for example, a pirate clan pays you to "lose" the convoy you're escorting).
 
+## Stage 2 details (as built)
+
+- **Standing tiers:** Hated (-60 and below), Hostile, Disliked, Neutral, Liked (10+), Trusted (30+), Honored (60+), Revered (85+). Tier changes are announced.
+- **Offices by port:** Concord ports have a Merchant Guild office and a Concord navy post. Independent ports have a Guild office and a back-room pirate contact for the nearest clan. Clan ports have only the pirate contact.
+- **Contract tiers 0–3** need Neutral, Liked, Trusted or Honored standing with the offering faction. Higher tiers go farther and pay more. Locked contracts are listed as a count with the standing they need. The first contract at each office is always entry level. Disliked or worse: no contracts from that faction. Boards refresh every 4 days. Up to 5 active contracts.
+- **Contract types now:** Guild freight (takes hold space), Guild procurement (buy goods and bring them to the port), Concord dispatches (fast courier jobs to Concord systems), pirate smuggling (contraband crates; pays 40% more into Concord space).
+- **Effects:** completing raises the faction and local standing. Concord work lowers every clan by 1; smuggling raises the other clans by 1. Failing (late, abandoned or seized) costs standing with the faction and the origin port.
+- **Contraband goods:** illegal weapons and black-market tech, traded only outside Concord ports (cheap in clan ports, in demand in independent ports).
+- **Customs:** arriving at a Concord port with contraband risks a scan (45% high security, 25% medium). Caught: contraband seized, fine of 1.5× its value, Concord -8, local -10, notoriety +3.
+- **Docking refused** when the ruling faction is Hostile or worse, or local standing is -30 or worse (-50 at independent ports). In orbit you can still travel and buy emergency fuel at triple price.
+- **Prices:** local standing moves prices by up to 5% either way.
+- **Notoriety** rises with high-tier contracts and getting caught.
+- Escort, patrol, bounty and piracy contracts arrive with combat in stage 3.
+
 ## Story arcs (triggered by reputation)
 
 - **Navy hero**: offered a commission; pulled into hunting the region's biggest pirate lord.
@@ -113,7 +127,7 @@ Several arcs can be active in one campaign, and they can clash.
 ## Build plan (proposed)
 
 1. Galaxy generation, travel and a basic trade loop. **(Built)**
-2. Ports, missions and reputation.
+2. Ports, missions and reputation. **(Built)**
 3. Combat.
 4. Boarding, crew and loyalty.
 5. Insurance, death and saving.
