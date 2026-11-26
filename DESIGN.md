@@ -84,11 +84,16 @@ Several arcs can be active in one campaign, and they can clash.
 
 - **Losing your ship:** if your ship is destroyed but you survive (escape pod), insurance replaces it with a basic ship or pays part of its value. Insurance has a premium and may be denied or cost more for captains with criminal reputations. Cargo is lost.
 - **Death:** game over. The player can reload a save.
-- When you can die versus only lose your ship is a detail to be decided (see Open questions).
+- **When you can die:**
+  - **Ship destroyed:** you escape in a pod and survive, unless the pod is caught by an enemy that hates you.
+  - **Losing a boarding fight** (yours or theirs) can kill you.
+  - **Capture and execution:** a faction that hates you can capture you (after you surrender, are disabled, or your pod is caught) and execute you. Factions that merely dislike you fine you, jail you or seize your cargo instead.
 
 ## Galaxy
 
-- Larger and randomly generated each campaign.
+- Large and randomly generated each campaign: about 120 systems in 9 regions.
+- The Core Worlds sit in the middle (Concord-controlled, high security). Frontier regions surround them, and the four corner regions are lawless pirate territory, each held by a pirate clan.
+- Systems are connected by jump lanes; travel happens lane by lane. A course plotter finds the shortest route to any system.
 - Systems belong to factions, or are lawless or contested.
 - Each system has a security level (how much the navy patrols), an economy type (mining, farming, industrial, etc.) that drives prices, and ports with services.
 - Travel between systems takes time and fuel; random encounters happen along routes, and their odds depend on security level and your reputation.
@@ -100,8 +105,6 @@ Several arcs can be active in one campaign, and they can clash.
 
 ## Open questions
 
-- Exact rules for when combat or boarding can kill you versus only destroy your ship.
-- Galaxy size (number of systems).
 - Number of save slots, and whether there's an optional "one life" mode.
 - Time pressure: does in-game time matter (deadlines, aging galaxy events)?
 - Economy depth: how prices react to your own trading.
@@ -109,7 +112,7 @@ Several arcs can be active in one campaign, and they can clash.
 
 ## Build plan (proposed)
 
-1. Galaxy generation, travel and a basic trade loop.
+1. Galaxy generation, travel and a basic trade loop. **(Built)**
 2. Ports, missions and reputation.
 3. Combat.
 4. Boarding, crew and loyalty.
