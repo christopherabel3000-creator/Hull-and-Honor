@@ -6,18 +6,38 @@ import {
 } from './reputation.js';
 import {
   MAX_ACTIVE, BOARD_REFRESH_DAYS, offices, officeName, officeFaction, missionSpace, isContraband,
-  generateBoard, canTake, missionTitle,
+  generateBoard, canTake, missionTitle, COMBAT_TYPES, missionEnemy,
 } from './missions.js';
+import {
+  RANGES, SYSTEMS, SYSTEM_STATE, WEAPONS, MAX_POWER_PER_SYSTEM, makeEnemy, effPower, usedPower, hitChance,
+  resolveTurn, boardingOdds, oddsText, boardingFight, demandSurrenderChance,
+} from './combat.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
+const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
 const STARTER_SHIP = { cls: 'Mule-class light freighter', cargo: 20, tank: 12 };
+const STARTER_COMBAT = {
+  hull: 60, hullMax: 60, shield: 20, shieldMax: 20, reactor: 6, agility: 1,
+  weapons: ['llaser', 'lcannon'], missiles: 0, missilesMax: 0, crew: 6, crewMax: 6, skill: 1,
+};
+function ensureShip(st) {
+  for (const [k, v] of Object.entries(STARTER_COMBAT)) if (st.ship[k] == null) st.ship[k] = Array.isArray(v) ? [...v] : v;
+  if (!st.ship.sys) st.ship.sys = { shields: 3, weapons: 3, engines: 3 };
+  if (!st.ship.power) st.ship.power = { shields: 2, weapons: 2, engines: 2 };
+}
+function newStarterShip() {
+  const ship = { ...STARTER_SHIP, ...STARTER_COMBAT, weapons: [...STARTER_COMBAT.weapons] };
+  ship.sys = { shields: 3, weapons: 3, engines: 3 };
+  ship.power = { shields: 2, weapons: 2, engines: 2 };
+  return ship;
+}
 
 const app = document.getElementById('app');
 const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
-const ui = { screen: 'title', confirmNew: false, confirmAbandon: null, priceGood: 'food', plotSelect: null, focus: null };
+const ui = { screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
 
 // ---------- helpers ----------
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -76,6 +96,14 @@ function completeMission(m, msgs) {
     for (const k of factionKeys(state)) if (k.startsWith('clan:') && k !== m.faction) changeRep(state, k, 1, msgs);
     if (galaxy.systems[m.dest].authority !== 'Concord') changeLocal(state, galaxy, m.dest, 2, msgs);
     addNotoriety(state, 1);
+  } else if (m.type === 'raid') {
+    changeRep(state, m.faction, 5 + m.tier, msgs);
+    changeRep(state, 'guild', -3, msgs);
+    addNotoriety(state, 2);
+  } else if (m.type === 'patrol' || m.type === 'bounty') {
+    changeRep(state, 'concord', 4 + m.tier, msgs);
+    changeLocal(state, galaxy, m.dest, 4, msgs);
+    addNotoriety(state, 1);
   } else if (m.type === 'dispatch') {
     changeRep(state, 'concord', 3 + m.tier, msgs);
     for (const k of factionKeys(state)) if (k.startsWith('clan:')) changeRep(state, k, -1, msgs);
@@ -103,7 +131,7 @@ function checkDeadlines(msgs) {
 
 function autoDeliver(msgs) {
   for (const m of [...state.missions]) {
-    if (m.dest === state.location && m.type !== 'procure') completeMission(m, msgs);
+    if (m.dest === state.location && m.type !== 'procure' && !COMBAT_TYPES.includes(m.type)) completeMission(m, msgs);
   }
 }
 
@@ -140,7 +168,7 @@ function newGame(captain, ship, seedText) {
   state = {
     version: 2, seed, day: 1, credits: 1500,
     captain: captain || 'Captain', shipName: ship || 'Wayfarer',
-    ship: { ...STARTER_SHIP }, fuel: STARTER_SHIP.tank,
+    ship: newStarterShip(), fuel: STARTER_SHIP.tank,
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
   };
   ensureRep(state, galaxy);
@@ -159,9 +187,10 @@ function continueGame() {
   state = saved;
   galaxy = generateGalaxy(state.seed);
   ensureRep(state, galaxy);
+  ensureShip(state);
   refreshMarket(state, state.location);
-  ui.screen = 'game';
-  ui.focus = 'sys-heading';
+  ui.screen = state.dead ? 'gameover' : 'game';
+  ui.focus = state.dead ? 'over-heading' : state.combat ? 'combat-heading' : 'sys-heading';
   render();
 }
 
@@ -264,6 +293,14 @@ function jump(to) {
   const sys = here();
   msgs.unshift(`Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`);
   log(`Jumped from ${from.name} to ${sys.name}.`);
+  const enc = missionEncounter(sys) || randomEncounter(sys);
+  if (enc && enc.message) msgs.push(enc.message);
+  else if (enc) { startCombat(enc, true, msgs); return; }
+  finishArrival(msgs);
+}
+
+function finishArrival(msgs) {
+  const sys = here();
   const dock = dockingStatus(state, sys);
   if (!dock.ok) {
     msgs.push(dock.reason);
@@ -274,7 +311,7 @@ function jump(to) {
       recordNotes(state, sys);
     }
   }
-  if (state.course === to) {
+  if (state.course === state.location) {
     state.course = null;
     msgs.push('Destination reached.');
   }
@@ -341,13 +378,396 @@ function abandonMission(id) {
   announce(msgs.join(' '));
 }
 
+// ---------- encounters and combat ----------
+const rand = () => Math.random();
+const pickW = w => { const e = Object.entries(w); let r = rand() * e.reduce((s, [, v]) => s + v, 0); for (const [k, v] of e) { r -= v; if (r <= 0) return k; } return e[0][0]; };
+
+function randomCargo(legalOnly, min, max) {
+  const pool = GOODS.filter(g => !legalOnly || !g.illegal);
+  const total = min + Math.floor(rand() * (max - min + 1));
+  const cargo = {};
+  for (let i = 0; i < total; i++) {
+    const g = pool[Math.floor(rand() * pool.length)];
+    cargo[g.id] = (cargo[g.id] || 0) + 1;
+  }
+  return Object.entries(cargo).map(([goodId, qty]) => ({ goodId, qty }));
+}
+
+function pirateKind(sec) {
+  return pickW({ high: { cutter: 1 }, medium: { cutter: 6, raider: 4 }, low: { cutter: 3, raider: 5, marauder: 2 }, none: { cutter: 2, raider: 5, marauder: 3 } }[sec]);
+}
+
+function missionEncounter(sys) {
+  const m = state.missions.find(x => COMBAT_TYPES.includes(x.type) && x.dest === sys.id);
+  if (!m) return null;
+  return missionCombat(m);
+}
+
+function missionCombat(m) {
+  const sys = galaxy.systems[m.dest];
+  const kind = missionEnemy(m);
+  if (m.type === 'raid') {
+    const enemy = makeEnemy(kind, 'guild', randomCargo(true, 8, 16));
+    return { enemy, range: 1, approach: true, missionId: m.id, intro: `Your target is here: a ${enemy.name} hauling Guild cargo.` };
+  }
+  const enemy = makeEnemy(kind, clanKey(sys.clan), randomCargo(false, 2, 8));
+  if (m.type === 'bounty') {
+    enemy.name = `${m.target}'s ${enemy.name}`;
+    enemy.captain = m.target;
+    return { enemy, range: 2, missionId: m.id, intro: `You find ${m.target}'s ship. They turn to fight.` };
+  }
+  return { enemy, range: 2, missionId: m.id, intro: `A ${sys.clan} ${enemy.name} moves to attack.` };
+}
+
+function randomEncounter(sys) {
+  const escort = state.missions.some(m => m.type === 'escort');
+  let chance = { high: 0.06, medium: 0.14, low: 0.24, none: 0.34 }[sys.security];
+  if (escort) chance = Math.max(chance, 0.4);
+  if (rand() >= chance) return null;
+  let type = pickW({ high: { patrol: 5, merchant: 4, pirate: 1 }, medium: { pirate: 4.5, merchant: 3.5, patrol: 2 }, low: { pirate: 7, merchant: 3 }, none: { pirate: 8, merchant: 2 } }[sys.security]);
+  if (escort && rand() < 0.75) type = 'pirate';
+  if (type === 'pirate') {
+    const clan = clanKey(sys.clan);
+    if (getRep(state, clan) >= 10) return { message: `Raiders of the ${sys.clan} clan recognize your ship and let you pass.` };
+    const enemy = makeEnemy(pirateKind(sys.security), clan, randomCargo(false, 0, 6));
+    const extra = escort ? ' They are after your convoy.' : '';
+    return { enemy, range: 2, intro: `Pirates! A ${sys.clan} ${enemy.name} is closing in.${extra}` };
+  }
+  if (type === 'merchant') {
+    const enemy = makeEnemy(rand() < 0.2 ? 'convoy' : 'hauler', 'guild', randomCargo(true, 6, 14));
+    return { enemy, range: 1, approach: true, intro: `A ${enemy.name} crosses your path.` };
+  }
+  if (getRep(state, 'concord') <= -30) {
+    const enemy = makeEnemy('patrol', 'concord');
+    return { enemy, range: 2, intro: 'A Concord patrol cutter has you on its wanted list and moves to intercept.' };
+  }
+  return { message: 'A Concord patrol cutter passes by.' };
+}
+
+function startCombat(enc, pendingArrival, msgs = []) {
+  try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  state.ship.shield = state.ship.shieldMax;
+  state.combat = {
+    enemy: enc.enemy, range: enc.range, turn: 0, move: 0, target: 'hull',
+    phase: enc.approach ? 'approach' : 'fight', lines: [], intro: enc.intro,
+    missionId: enc.missionId ?? null, pendingArrival, pendingMsgs: msgs, outcome: null, resultText: [],
+  };
+  ui.confirmSurrender = false;
+  save();
+  ui.focus = 'combat-heading';
+  render();
+  announce([...msgs, enc.intro].join(' '));
+}
+
+const combatMission = () => state.combat.missionId != null ? state.missions.find(m => m.id === state.combat.missionId) : null;
+
+function combatAction(action) {
+  const cb = state.combat;
+  ui.confirmSurrender = false;
+  if (action === 'board') {
+    if (cb.range !== 0 || effPower(cb.enemy, 'engines') > 0) { announce('You can only board a ship whose engines are disabled, at close range.'); return; }
+  }
+  const r = resolveTurn(cb, state.ship, action);
+  cb.lines = r.lines;
+  if (r.outcome) { endFight(r.outcome, r.lines); return; }
+  save();
+  render();
+  announce(r.lines.join(' '));
+}
+
+function attackMerchant() {
+  const cb = state.combat;
+  const sys = here();
+  const msgs = [];
+  changeRep(state, 'guild', -6, msgs);
+  changeRep(state, 'concord', sys.authority === 'Concord' || sys.security === 'high' || sys.security === 'medium' ? -4 : -1, msgs);
+  changeRep(state, clanKey(sys.clan), 2, msgs);
+  addNotoriety(state, 2);
+  cb.phase = 'fight';
+  cb.attacked = true;
+  log(`Attacked a ${cb.enemy.name} near ${sys.name}.`);
+  save();
+  render();
+  announce(['You open fire. Piracy will not be forgotten.', ...msgs].join(' '));
+}
+
+function lootEnemy(msgs) {
+  const e = state.combat.enemy;
+  const taken = [];
+  const sorted = [...e.cargo].sort((a, b) => good(b.goodId).base - good(a.goodId).base);
+  for (const c of sorted) {
+    const n = Math.min(c.qty, freeSpace());
+    if (n <= 0) continue;
+    const slot = state.cargo[c.goodId] || (state.cargo[c.goodId] = { qty: 0, cost: 0 });
+    slot.qty += n;
+    c.qty -= n;
+    taken.push(`${n} ${good(c.goodId).name}`);
+  }
+  e.cargo = e.cargo.filter(c => c.qty > 0);
+  msgs.push(taken.length ? `You take ${taken.join(', ')}.` : 'There is nothing you can fit in your hold.');
+  if (e.cargo.length) msgs.push('Some cargo had to be left behind.');
+}
+
+// Reputation and rewards for beating a ship. how: destroyed | captured | released | looted | prisoner
+function defeatEffects(how, msgs) {
+  const cb = state.combat;
+  const e = cb.enemy;
+  if (e.side === 'pirate') {
+    changeRep(state, e.faction, { destroyed: -4, captured: -3, looted: -3, prisoner: -3, released: -1 }[how], msgs);
+    if (how !== 'released') {
+      changeRep(state, 'concord', 2, msgs);
+      if (getRep(state, 'concord') > -30) {
+        const bounty = { cutter: 120, raider: 220, marauder: 380, flagship: 600 }[e.kind];
+        state.credits += bounty;
+        msgs.push(`The Concord pays a ${bounty} credit bounty.`);
+      }
+    }
+    addNotoriety(state, 1);
+  } else if (e.side === 'merchant') {
+    if (how === 'destroyed') { changeRep(state, 'guild', -4, msgs); addNotoriety(state, 1); }
+    if (how === 'released') changeRep(state, 'guild', 1, msgs);
+  } else if (e.side === 'concord') {
+    if (how === 'destroyed') { changeRep(state, 'concord', -10, msgs); addNotoriety(state, 3); }
+  }
+  const m = combatMission();
+  if (m) {
+    if (m.type === 'patrol') {
+      m.count--;
+      if (m.count <= 0) completeMission(m, msgs);
+      else msgs.push(`${m.count} more pirate ${m.count === 1 ? 'ship' : 'ships'} to clear here.`);
+    } else if (m.type === 'bounty') {
+      if (how === 'prisoner') { m.pay = Math.round(m.pay * 1.5 / 10) * 10; msgs.push(`${m.target} is taken alive for a bigger reward.`); }
+      completeMission(m, msgs);
+    } else if (m.type === 'raid') {
+      completeMission(m, msgs);
+    }
+  }
+}
+
+function failEscort(msgs) {
+  for (const m of [...state.missions]) if (m.type === 'escort') failMission(m, msgs, 'convoy lost');
+}
+
+function loseCargoMissions(msgs, reason) {
+  for (const m of [...state.missions]) if (missionSpace(m) > 0 || m.type === 'escort') failMission(m, msgs, reason);
+}
+
+function die(reason) {
+  state.dead = { reason, day: state.day };
+  state.combat = null;
+  log(reason);
+  save();
+  ui.screen = 'gameover';
+  ui.focus = 'over-heading';
+  render();
+  announce(reason);
+}
+
+function endFight(outcome, lines) {
+  const cb = state.combat;
+  const e = cb.enemy;
+  const msgs = [];
+  cb.outcome = outcome;
+  if (outcome === 'player-killed') {
+    die(`Captain ${state.captain} was killed in a boarding fight on day ${state.day}.`);
+    return;
+  }
+  if (outcome === 'player-destroyed') {
+    const hater = e.side !== 'merchant' && getRep(state, e.faction) <= -60;
+    if (hater && rand() < 0.6) {
+      die(`Captain ${state.captain}'s escape pod was caught by the ${factionName(e.faction)}, and the captain was executed on day ${state.day}.`);
+      return;
+    }
+    rescue(msgs);
+  } else if (outcome === 'enemy-destroyed') {
+    const salvage = 30 + Math.floor(rand() * 90);
+    state.credits += salvage;
+    msgs.push(`You salvage ${salvage} credits worth of wreckage.`);
+    defeatEffects('destroyed', msgs);
+  } else if (outcome === 'captured') {
+    lootEnemy(msgs);
+    msgs.push('Their crew is set adrift in escape pods.');
+    defeatEffects('captured', msgs);
+  } else if (outcome === 'player-escaped' || outcome === 'separated') {
+    failEscort(msgs);
+  }
+  cb.phase = 'result';
+  cb.resultText = [...lines, ...msgs];
+  save();
+  ui.focus = 'combat-result';
+  render();
+  announce(cb.resultText.join(' '));
+}
+
+function surrenderChoice(choice) {
+  const cb = state.combat;
+  const msgs = [];
+  if (choice === 'loot') { lootEnemy(msgs); msgs.push('You let their ship go.'); defeatEffects('looted', msgs); }
+  if (choice === 'prisoner') { lootEnemy(msgs); defeatEffects('prisoner', msgs); }
+  if (choice === 'release') { msgs.push('You let them go.'); defeatEffects('released', msgs); }
+  if (choice === 'destroy') {
+    msgs.push('You destroy the surrendered ship. Word of this will spread.');
+    changeRep(state, cb.enemy.faction, -6, msgs);
+    if (cb.enemy.side === 'merchant') changeRep(state, 'concord', -3, msgs);
+    addNotoriety(state, 3);
+    defeatEffects('destroyed', msgs);
+  }
+  cb.outcome = 'resolved';
+  cb.resultText = msgs;
+  save();
+  ui.focus = 'combat-result';
+  render();
+  announce(msgs.join(' '));
+}
+
+function playerSurrender() {
+  const cb = state.combat;
+  const e = cb.enemy;
+  if (!ui.confirmSurrender) {
+    ui.confirmSurrender = true;
+    render();
+    announce('Press Confirm surrender to give up the fight.');
+    return;
+  }
+  ui.confirmSurrender = false;
+  const msgs = [];
+  if (getRep(state, e.faction) <= -60) {
+    die(`Captain ${state.captain} surrendered to the ${factionName(e.faction)} and was executed on day ${state.day}.`);
+    return;
+  }
+  if (e.side === 'pirate') {
+    state.cargo = {};
+    const taken = Math.round(state.credits * 0.3);
+    state.credits -= taken;
+    msgs.push(`You surrender. The pirates strip your hold and take ${taken} credits, then let you go.`);
+    loseCargoMissions(msgs, 'cargo taken by pirates');
+  } else {
+    const fine = Math.round(state.credits * 0.4);
+    state.credits -= fine;
+    for (const g of GOODS) if (g.illegal) delete state.cargo[g.id];
+    for (const m of [...state.missions]) if (isContraband(m)) failMission(m, msgs, 'cargo seized', 4);
+    failEscort(msgs);
+    state.day += 10;
+    state.rep.concord = Math.max(state.rep.concord, -29);
+    msgs.push(`You surrender to the Concord. You are fined ${fine} credits and serve 10 days in prison. Your record is partly cleared.`);
+    checkDeadlines(msgs);
+  }
+  log(msgs[0]);
+  cb.phase = 'result';
+  cb.outcome = 'player-surrendered';
+  cb.resultText = msgs;
+  save();
+  ui.focus = 'combat-result';
+  render();
+  announce(msgs.join(' '));
+}
+
+function rescue(msgs) {
+  const hops = hopCounts(galaxy, state.location);
+  const order = galaxy.systems.map(s => s.id).filter(id => hops[id] < Infinity).sort((a, b) => hops[a] - hops[b]);
+  const port = order.find(id => dockingStatus(state, galaxy.systems[id]).ok) ?? state.location;
+  const name = state.shipName;
+  const deductible = Math.min(state.credits, 500);
+  state.credits -= deductible;
+  state.cargo = {};
+  loseCargoMissions(msgs, 'ship destroyed');
+  state.ship = newStarterShip();
+  state.fuel = state.ship.tank;
+  arrive(port);
+  msgs.push(`You escape in your pod and are towed to ${galaxy.systems[port].name}. Basic insurance replaces the ${name} with a used Mule freighter, minus a ${deductible} credit deductible.`);
+  log(`The ${name} was destroyed. Rescued at ${galaxy.systems[port].name}.`);
+}
+
+function leaveCombat() {
+  const cb = state.combat;
+  state.combat = null;
+  state.ship.shield = state.ship.shieldMax;
+  if (cb.outcome === 'player-destroyed') {
+    finishArrival([]);
+    return;
+  }
+  if (cb.pendingArrival) finishArrival([]);
+  else { save(); ui.focus = 'sys-heading'; render(); }
+}
+
+function ignoreEncounter() {
+  const cb = state.combat;
+  state.combat = null;
+  if (cb.pendingArrival) finishArrival(['You let them pass.']);
+  else { save(); ui.focus = 'sys-heading'; render(); announce('You let them pass.'); }
+}
+
+function huntTarget(id) {
+  const m = state.missions.find(x => x.id === id);
+  if (!m || m.dest !== state.location) return;
+  startCombat(missionCombat(m), false);
+}
+
+function setPower(sysName, delta) {
+  const p = state.ship.power;
+  const next = p[sysName] + delta;
+  if (next < 0 || next > MAX_POWER_PER_SYSTEM) { announce(`${sysName} power is at its ${delta > 0 ? 'maximum' : 'minimum'}.`); return; }
+  if (delta > 0 && usedPower(state.ship) >= state.ship.reactor) { announce('No unassigned power. Take power from another system first.'); return; }
+  p[sysName] = next;
+  save();
+  render();
+  announce(`Shields ${p.shields}, weapons ${p.weapons}, engines ${p.engines}. ${state.ship.reactor - usedPower(state.ship)} unassigned.`);
+}
+
+// ---------- shipyard ----------
+const hullRepairPrice = sys => ({ high: 5, medium: 7, low: 9, none: 11 }[sys.security]);
+const SYSTEM_REPAIR_PRICE = 40, CREW_PRICE = 50, MISSILE_PRICE = 30;
+
+function repairHull() {
+  const price = hullRepairPrice(here());
+  const need = state.ship.hullMax - state.ship.hull;
+  const n = Math.min(need, Math.floor(state.credits / price));
+  if (need <= 0) { announce('Hull is undamaged.'); return; }
+  if (n <= 0) { announce('Not enough credits.'); return; }
+  state.ship.hull += n;
+  state.credits -= n * price;
+  save(); render();
+  announce(`Repaired ${n} hull for ${n * price}. Hull ${state.ship.hull} of ${state.ship.hullMax}.`);
+}
+function repairSystems() {
+  let spent = 0;
+  for (const s of SYSTEMS) {
+    while (state.ship.sys[s] < 3 && state.credits >= SYSTEM_REPAIR_PRICE) {
+      state.ship.sys[s]++; state.credits -= SYSTEM_REPAIR_PRICE; spent += SYSTEM_REPAIR_PRICE;
+    }
+  }
+  if (!spent) { announce(SYSTEMS.every(s => state.ship.sys[s] === 3) ? 'All systems are operational.' : 'Not enough credits.'); return; }
+  save(); render();
+  announce(`Systems repaired for ${spent}. Credits ${state.credits}.`);
+}
+function hireCrew() {
+  const need = state.ship.crewMax - state.ship.crew;
+  const n = Math.min(need, Math.floor(state.credits / CREW_PRICE));
+  if (need <= 0) { announce('Your crew is at full strength.'); return; }
+  if (n <= 0) { announce('Not enough credits.'); return; }
+  state.ship.crew += n; state.credits -= n * CREW_PRICE;
+  save(); render();
+  announce(`Hired ${plural(n, 'crew member')} for ${n * CREW_PRICE}. Crew ${state.ship.crew} of ${state.ship.crewMax}.`);
+}
+function buyMissiles() {
+  const need = state.ship.missilesMax - state.ship.missiles;
+  const n = Math.min(need, Math.floor(state.credits / MISSILE_PRICE));
+  if (need <= 0) { announce('Missile racks are full.'); return; }
+  if (n <= 0) { announce('Not enough credits.'); return; }
+  state.ship.missiles += n; state.credits -= n * MISSILE_PRICE;
+  save(); render();
+  announce(`Bought ${plural(n, 'missile')}. Missiles ${state.ship.missiles} of ${state.ship.missilesMax}.`);
+}
+
 // ---------- rendering ----------
 function titleHTML() {
   const saved = loadSave();
   let cont = '';
   if (saved) {
     const g = generateGalaxy(saved.seed);
-    cont = `<section aria-labelledby="h-cont"><h2 id="h-cont" tabindex="-1">Continue</h2>
+    cont = saved.dead ? `<section aria-labelledby="h-cont"><h2 id="h-cont" tabindex="-1">Last campaign</h2>
+      <p>${esc(saved.dead.reason)}</p>
+      <button data-action="continue" data-key="continue">View</button></section>` : `<section aria-labelledby="h-cont"><h2 id="h-cont" tabindex="-1">Continue</h2>
       <p>Captain ${esc(saved.captain)} of the ${esc(saved.shipName)}, day ${saved.day}, at ${esc(g.systems[saved.location].name)}, ${saved.credits} credits.</p>
       <button data-action="continue" data-key="continue">Continue campaign</button></section>`;
   }
@@ -395,7 +815,15 @@ function statusHTML() {
     <li>Fuel: ${state.fuel} of ${state.ship.tank}</li>
     <li>Hold: ${holdUsed()} of ${state.ship.cargo}: ${holdContents()}</li>
     <li>Ship: the ${esc(state.shipName)}, ${state.ship.cls}</li>
+    <li>Hull: ${state.ship.hull} of ${state.ship.hullMax}</li>
+    <li>Systems: ${systemsText(state.ship)}</li>
+    <li>Crew: ${state.ship.crew} of ${state.ship.crewMax}</li>
     ${course}</ul></section>`;
+}
+
+function systemsText(c) {
+  if (SYSTEMS.every(x => c.sys[x] === 3)) return 'all operational';
+  return SYSTEMS.map(x => `${x} ${SYSTEM_STATE[c.sys[x]]}`).join(', ');
 }
 
 function missionDetails(m, hops) {
@@ -415,6 +843,10 @@ function contractsHTML() {
   const active = state.missions.map(m => {
     const btns = [];
     if (m.dest !== state.location) btns.push(`<button data-action="plotto" data-arg="${m.dest}" data-key="plotto-${m.id}">Plot course to ${esc(galaxy.systems[m.dest].name)}</button>`);
+    if (COMBAT_TYPES.includes(m.type) && m.dest === state.location) {
+      const label = m.type === 'patrol' ? 'Hunt pirates here' : m.type === 'bounty' ? `Search for ${esc(m.target)}` : 'Search for the convoy';
+      btns.push(`<button data-action="hunt" data-arg="${m.id}" data-key="hunt-${m.id}">${label}</button>`);
+    }
     if (m.type === 'procure' && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
     const confirm = ui.confirmAbandon === m.id;
     btns.push(`<button data-action="abandon" data-arg="${m.id}" data-key="abandon-${m.id}">${confirm ? 'Confirm abandon' : 'Abandon'}</button>`);
@@ -471,12 +903,107 @@ function marketHTML() {
 }
 
 function servicesHTML() {
-  const price = fuelPrice(here());
-  const need = state.ship.tank - state.fuel;
-  return `<section id="sec-services" aria-labelledby="h-services"><h2 id="h-services" tabindex="-1">Fuel</h2>
-    <p>Fuel costs ${price} credits per unit here.</p>
+  const sys = here();
+  const sh = state.ship;
+  const price = fuelPrice(sys);
+  const need = sh.tank - state.fuel;
+  const hullNeed = sh.hullMax - sh.hull;
+  const sysNeed = SYSTEMS.reduce((n, x) => n + (3 - sh.sys[x]), 0);
+  const crewNeed = sh.crewMax - sh.crew;
+  const misNeed = sh.missilesMax - sh.missiles;
+  return `<section id="sec-services" aria-labelledby="h-services"><h2 id="h-services" tabindex="-1">Shipyard</h2>
+    <p>Fuel ${price} per unit, hull repair ${hullRepairPrice(sys)} per point, system repair ${SYSTEM_REPAIR_PRICE} per level, crew ${CREW_PRICE} each.</p>
     <button data-action="refuel" data-key="refuel">Refuel to full${need ? `, ${need * price} credits` : ''}</button>
-    <button data-action="fuel1" data-key="fuel1">Buy 1 fuel</button></section>`;
+    <button data-action="fuel1" data-key="fuel1">Buy 1 fuel</button>
+    ${hullNeed ? `<button data-action="repairhull" data-key="repairhull">Repair hull, ${hullNeed * hullRepairPrice(sys)} credits</button>` : ''}
+    ${sysNeed ? `<button data-action="repairsys" data-key="repairsys">Repair systems, ${sysNeed * SYSTEM_REPAIR_PRICE} credits</button>` : ''}
+    ${crewNeed ? `<button data-action="hirecrew" data-key="hirecrew">Hire ${plural(crewNeed, 'crew member')}, ${crewNeed * CREW_PRICE} credits</button>` : ''}
+    ${misNeed > 0 ? `<button data-action="missiles" data-key="missiles">Restock ${plural(misNeed, 'missile')}, ${misNeed * MISSILE_PRICE} credits</button>` : ''}
+    </section>`;
+}
+
+// ---------- combat screen ----------
+function weaponLine(c, target, id, range, aim, mine) {
+  const w = WEAPONS[id];
+  const ammo = w.ammo ? `, ${c.missiles} missiles left` : '';
+  if (!mine) return `<li>${w.name}${ammo}</li>`;
+  const ch = Math.round(hitChance(c, target, id, range, aim) * 100);
+  return `<li>${w.name}: ${w.dmg} damage, uses ${w.power} power, ${ch}% to hit now${ammo}</li>`;
+}
+
+function combatHTML() {
+  const cb = state.combat;
+  const e = cb.enemy;
+  const p = state.ship;
+  const head = `<h1 id="combat-heading" tabindex="-1">Combat: ${esc(e.name)}</h1>`;
+  if (cb.phase === 'approach') {
+    return `${head}<p>${esc(cb.intro)}</p>
+      <p>Attacking them is piracy: the Merchant Guild and the Concord will hate it, and the pirate clans will approve.</p>
+      <button data-action="c-attack" data-key="c-attack">Attack them</button>
+      <button data-action="c-ignore" data-key="c-ignore">Let them pass</button>`;
+  }
+  if (cb.phase === 'result') {
+    let choices = '';
+    if (cb.outcome === 'enemy-surrendered') {
+      const hasCargo = e.cargo.some(c => c.qty > 0);
+      choices = `<p>What do you do with them?</p>
+        ${hasCargo ? '<button data-action="c-loot" data-key="c-loot">Take their cargo and let them go</button>' : ''}
+        ${e.captain ? `<button data-action="c-prisoner" data-key="c-prisoner">Take ${esc(e.captain)} prisoner</button>` : ''}
+        <button data-action="c-release" data-key="c-release">Let them go</button>
+        <button data-action="c-destroy" data-key="c-destroy">Destroy them</button>`;
+    } else {
+      choices = '<button data-action="c-leave" data-key="c-leave">Continue</button>';
+    }
+    return `${head}<section aria-labelledby="combat-result"><h2 id="combat-result" tabindex="-1">Outcome</h2>
+      <ul>${cb.resultText.map(l => `<li>${esc(l)}</li>`).join('')}</ul>${choices}</section>`;
+  }
+  const pressed = (cond) => `aria-pressed="${cond ? 'true' : 'false'}"`;
+  const moves = [[-1, 'Close in'], [0, 'Hold range'], [1, 'Pull back']].map(([v, l]) =>
+    `<button data-action="c-move" data-arg="${v}" data-key="c-move${v}" ${pressed(cb.move === v)}>${l}</button>`).join(' ');
+  const targets = ['hull', 'shields', 'weapons', 'engines'].map(t =>
+    `<button data-action="c-target" data-arg="${t}" data-key="c-target-${t}" ${pressed(cb.target === t)}>${t.charAt(0).toUpperCase() + t.slice(1)}</button>`).join(' ');
+  const power = SYSTEMS.map(x => `<li><p>${x.charAt(0).toUpperCase() + x.slice(1)}: ${p.power[x]} power${effPower(p, x) !== p.power[x] ? `, ${effPower(p, x)} effective` : ''}</p>
+    <button data-action="c-power" data-arg="${x}:1" data-key="c-power-${x}-up" aria-label="More power to ${x}">More</button>
+    <button data-action="c-power" data-arg="${x}:-1" data-key="c-power-${x}-down" aria-label="Less power to ${x}">Less</button></li>`).join('');
+  const boardOk = cb.range === 0 && effPower(e, 'engines') === 0;
+  const odds = oddsText(boardingOdds(p, e, false));
+  const demand = e.side !== 'concord'
+    ? `<button data-action="c-demand" data-key="c-demand">Demand surrender instead of firing</button>` : '';
+  const surrender = e.side !== 'merchant'
+    ? `<button data-action="c-surrender" data-key="c-surrender">${ui.confirmSurrender ? 'Confirm surrender' : 'Surrender'}</button>` : '';
+  const last = cb.lines.length ? cb.lines : [cb.intro];
+  return `${head}
+    <p>Range ${RANGES[cb.range]}. Turn ${cb.turn + 1}. Maneuver: ${cb.move < 0 ? 'close in' : cb.move > 0 ? 'pull back' : 'hold range'}. Target: ${cb.target}.</p>
+    <button data-action="c-turn" data-key="c-turn">Fire and maneuver</button>
+    <section id="sec-lastturn" aria-labelledby="h-lastturn"><h2 id="h-lastturn" tabindex="-1">Last turn</h2>
+      <ul>${last.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>
+    <section id="sec-orders" aria-labelledby="h-orders"><h2 id="h-orders" tabindex="-1">Orders</h2>
+      <h3>Maneuver</h3><p>${moves}</p>
+      <p>Pulling back at extreme range escapes the fight.</p>
+      <h3>Target</h3><p>${targets}</p>
+      <p>Aiming at a system is 10% less accurate. Shots hit shields first.</p>
+      <h3>Power, ${p.reactor - usedPower(p)} of ${p.reactor} unassigned</h3><ul class="cards">${power}</ul></section>
+    <section id="sec-you" aria-labelledby="h-you"><h2 id="h-you" tabindex="-1">Your ship</h2><ul>
+      <li>Hull ${p.hull} of ${p.hullMax}</li><li>Shields ${p.shield} of ${p.shieldMax}</li>
+      <li>Systems: ${systemsText(p)}</li><li>Crew ${p.crew}</li></ul>
+      <h3>Weapons</h3><ul>${p.weapons.map(id => weaponLine(p, e, id, cb.range, cb.target, true)).join('')}</ul></section>
+    <section id="sec-them" aria-labelledby="h-them"><h2 id="h-them" tabindex="-1">Enemy</h2><ul>
+      <li>${esc(e.name)}, ${factionName(e.faction)}</li>
+      <li>Hull ${e.hull} of ${e.hullMax}</li><li>Shields ${e.shield} of ${e.shieldMax}</li>
+      <li>Systems: ${systemsText(e)}</li><li>Crew ${e.crew}</li></ul>
+      <h3>Weapons</h3><ul>${e.weapons.map(id => weaponLine(e, p, id, cb.range, 'hull', false)).join('')}</ul></section>
+    <section id="sec-other" aria-labelledby="h-other"><h2 id="h-other" tabindex="-1">Other actions</h2>
+      ${demand}
+      ${boardOk ? `<button data-action="c-board" data-key="c-board">Board them, odds ${odds}. If you lose, you die.</button>` : '<p>Boarding needs close range and their engines disabled.</p>'}
+      ${surrender}</section>`;
+}
+
+function gameOverHTML() {
+  const backup = (() => { try { return localStorage.getItem(PREFIGHT_KEY); } catch (e) { return null; } })();
+  return `<h1 id="over-heading" tabindex="-1">Game over</h1>
+    <p>${esc(state.dead.reason)}</p>
+    ${backup ? '<button data-action="reloadfight" data-key="reloadfight">Reload from before the fight</button>' : ''}
+    <button data-action="title" data-key="title">Return to title screen</button>`;
 }
 
 function refusedHTML() {
@@ -559,6 +1086,7 @@ function logHTML() {
 }
 
 function gameHTML() {
+  if (state.combat) return combatHTML();
   const sys = here();
   const port = docked() ? `${contractsHTML()}${marketHTML()}${servicesHTML()}` : `${refusedHTML()}${contractsHTML()}`;
   return `<h1 id="sys-heading" tabindex="-1">${esc(sys.name)}</h1>
@@ -575,7 +1103,7 @@ function render() {
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
   if (ui.screen === 'game') save();
-  app.innerHTML = ui.screen === 'title' ? titleHTML() : gameHTML();
+  app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : gameHTML();
   let target = null;
   if (ui.focus) { target = document.getElementById(ui.focus); ui.focus = null; }
   else if (key) target = app.querySelector(`[data-key="${key}"]`);
@@ -607,6 +1135,32 @@ app.addEventListener('click', e => {
     case 'accept': acceptMission(Number(arg)); break;
     case 'deliver': deliverProcurement(Number(arg)); break;
     case 'abandon': abandonMission(Number(arg)); break;
+    case 'hunt': huntTarget(Number(arg)); break;
+    case 'repairhull': repairHull(); break;
+    case 'repairsys': repairSystems(); break;
+    case 'hirecrew': hireCrew(); break;
+    case 'missiles': buyMissiles(); break;
+    case 'c-attack': attackMerchant(); break;
+    case 'c-ignore': ignoreEncounter(); break;
+    case 'c-move': state.combat.move = Number(arg); save(); render(); announce(`Maneuver: ${b.textContent.toLowerCase()}.`); break;
+    case 'c-target': state.combat.target = arg; save(); render(); announce(`Target: ${arg}.`); break;
+    case 'c-power': { const [x, d] = arg.split(':'); setPower(x, Number(d)); break; }
+    case 'c-turn': combatAction('fire'); break;
+    case 'c-demand': combatAction('demand'); break;
+    case 'c-board': combatAction('board'); break;
+    case 'c-surrender': playerSurrender(); break;
+    case 'c-loot': surrenderChoice('loot'); break;
+    case 'c-prisoner': surrenderChoice('prisoner'); break;
+    case 'c-release': surrenderChoice('release'); break;
+    case 'c-destroy': surrenderChoice('destroy'); break;
+    case 'c-leave': leaveCombat(); break;
+    case 'reloadfight': {
+      try {
+        const raw = localStorage.getItem(PREFIGHT_KEY);
+        if (raw) { localStorage.setItem(SAVE_KEY, raw); continueGame(); announce('Reloaded from before the fight.'); }
+      } catch (err) { /* ignore */ }
+      break;
+    }
     case 'title': ui.screen = 'title'; ui.confirmNew = false; ui.focus = 'title-heading'; render(); break;
   }
 });

@@ -24,7 +24,18 @@ export function officeName(office, sys) {
 export const officeFaction = (office, sys) => (office === 'pirate' ? clanKey(sys.clan) : office);
 
 // Cargo space a contract takes up in your hold.
-export const missionSpace = m => (m.type === 'procure' ? 0 : m.units);
+export const missionSpace = m => (['freight', 'dispatch', 'smuggle'].includes(m.type) ? m.units : 0);
+export const COMBAT_TYPES = ['patrol', 'bounty', 'raid'];
+
+const CAPTAIN_FIRST = ['Vex', 'Mara', 'Dask', 'Iolo', 'Reth', 'Sable', 'Kain', 'Orra', 'Tamsin', 'Bram', 'Juno', 'Corvin', 'Nyla', 'Hask'];
+const CAPTAIN_LAST = ['Varn', 'the Grey', 'Kesh', 'Halloway', 'Blackwater', 'Ashby', 'Morrow', 'Quill', 'Dray', 'the Knife', 'Stroud', 'Okonkwo'];
+
+export function missionEnemy(m) {
+  if (m.type === 'patrol') return ['cutter', Math.random() < 0.5 ? 'cutter' : 'raider', 'raider', 'marauder'][m.tier];
+  if (m.type === 'bounty') return ['raider', 'marauder', 'flagship', 'flagship'][m.tier];
+  if (m.type === 'raid') return ['hauler', 'hauler', 'convoy', 'convoy'][m.tier];
+  return null;
+}
 export const isContraband = m => m.type === 'smuggle';
 
 function routeDays(galaxy, path, tank) {
@@ -43,6 +54,8 @@ function rndTier() {
 
 function okDest(type, s) {
   if (type === 'dispatch') return s.authority === 'Concord';
+  if (type === 'patrol' || type === 'bounty') return s.security === 'low' || s.security === 'none';
+  if (type === 'raid') return (s.authority === 'Concord' || s.authority === 'Independent') && s.security !== 'high';
   return s.authority === 'Concord' || s.authority === 'Independent';
 }
 
@@ -71,6 +84,20 @@ function makeMission(state, galaxy, sys, hops, office, type, forceTier) {
     const units = 4 + tier * 3 + rint(4);
     return { ...base, dest: dest.id, units, pay: round10((40 * h + 6 * units) * mult), deadline: state.day + Math.ceil(days * 1.6) + 3 };
   }
+  if (type === 'escort') {
+    return { ...base, dest: dest.id, units: 0, pay: round10(60 * h * mult), deadline: state.day + Math.ceil(days * 1.6) + 3 };
+  }
+  if (type === 'patrol') {
+    const count = [1, 2, 2, 3][tier];
+    return { ...base, dest: dest.id, units: 0, count, pay: round10((50 * h + 170 * count) * mult), deadline: state.day + Math.ceil(days * 1.5) + 6 };
+  }
+  if (type === 'bounty') {
+    const target = `${pick(CAPTAIN_FIRST)} ${pick(CAPTAIN_LAST)}`;
+    return { ...base, dest: dest.id, units: 0, target, targetClan: dest.clan, pay: round10((320 + 60 * h) * mult), deadline: state.day + Math.ceil(days * 1.5) + 8 };
+  }
+  if (type === 'raid') {
+    return { ...base, dest: dest.id, units: 0, pay: round10((100 * h + 220) * mult), deadline: state.day + Math.ceil(days * 1.5) + 5 };
+  }
   if (type === 'dispatch') {
     return { ...base, dest: dest.id, units: 1, pay: round10(75 * h * mult), deadline: state.day + Math.ceil(days * 1.3) + 2 };
   }
@@ -84,7 +111,8 @@ export function generateBoard(state, galaxy, sys) {
   const hops = hopCounts(galaxy, sys.id);
   const list = [];
   for (const office of offices(sys)) {
-    const types = office === 'guild' ? ['freight', 'freight', 'procure'] : office === 'concord' ? ['dispatch'] : ['smuggle'];
+    const types = office === 'guild' ? ['freight', 'freight', 'procure', 'escort']
+      : office === 'concord' ? ['dispatch', 'patrol', 'bounty'] : ['smuggle', 'smuggle', 'raid'];
     const n = 3 + rint(2);
     for (let i = 0; i < n; i++) {
       // The first contract at each office is always entry level.
@@ -105,6 +133,10 @@ export function missionTitle(m, galaxy) {
     case 'freight': return `Haul ${m.units} crates of Guild freight to ${dest}`;
     case 'dispatch': return `Carry sealed Concord dispatches to ${dest}`;
     case 'smuggle': return `Smuggle ${m.units} crates of contraband to ${dest}`;
+    case 'escort': return `Escort a Guild convoy to ${dest}`;
+    case 'patrol': return `Clear ${m.count === 1 ? '1 pirate ship' : `${m.count} pirate ships`} from ${dest}`;
+    case 'bounty': return `Hunt the pirate captain ${m.target} at ${dest}`;
+    case 'raid': return `Raid a Guild convoy passing through ${dest}`;
     case 'procure': return `Bring ${m.units} ${GOODS.find(g => g.id === m.goodId).name} to ${dest}`;
   }
   return 'Contract';

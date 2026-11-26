@@ -66,6 +66,26 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **Notoriety** rises with high-tier contracts and getting caught.
 - Escort, patrol, bounty and piracy contracts arrive with combat in stage 3.
 
+## Stage 3 details (as built)
+
+- **Power:** reactor output split between shields, weapons and engines (0–4 each). Starter Mule: reactor 6, hull 60, shields 20, light laser and light cannon, crew 6.
+- **Systems** have four states: operational, damaged, badly damaged, disabled. Damage scales effective power down; disabled means zero.
+- **Shields** absorb damage first and regenerate 3 per effective shield power each turn.
+- **Weapons:** light laser (best close), heavy laser, light cannon (best medium), heavy cannon, missile rack (best long, uses ammo). Each uses weapon power to fire; the screen shows hit chance at the current range.
+- **Aiming** at shields, weapons or engines is 10% less accurate, does half hull damage and knocks the system down a level once shields are down. Hull hits can also damage a random system.
+- **Maneuver:** close in, hold or pull back; engine power times agility decides contested moves. Pulling back successfully at extreme range escapes.
+- **Enemies:** pirate cutter, raider, marauder, flagship; Guild hauler and armed convoy ship (they flee); Concord patrol cutter (attacks if you are Hostile or worse). Pirates aim for engines, merchants and patrols for weapons.
+- **Actions:** fire and maneuver, demand surrender (instead of firing), board (close range, enemy engines disabled; odds shown; losing kills you), surrender.
+- **Enemy surrender:** take their cargo, take a bounty target prisoner (+50% pay), let them go, or destroy them (big reputation and notoriety cost).
+- **Pirate boarding:** pirates board you if your engines are disabled at close range and they have at least as many crew.
+- **Your surrender:** pirates take your cargo and 30% of your credits; the Concord fines 40%, seizes contraband and jails you for 10 days, resetting your standing to Disliked. Anyone who hates you executes you instead.
+- **Ship destroyed:** you escape in a pod. A faction that hates you catches the pod 60% of the time and executes you. Otherwise you're towed to the nearest port that will take you and get a used Mule, losing cargo and paying a 500 credit deductible. (Full insurance comes in stage 5.)
+- **Game over** screen offers reloading from before the fight.
+- **Random encounters** on arrival: 6% high security, 14% medium, 24% low, 34% none (at least 40% while escorting). Pirates let you pass if their clan Likes you. Merchants can be attacked (piracy: Guild -6, Concord -4 in patrolled space, clan +2) or ignored.
+- **Rewards:** beating pirates pays a Concord bounty (120–600) unless you are Hostile with the Concord, and raises Concord standing; the clan's drops. Destroyed ships leave salvage.
+- **New contracts:** Guild escort (fails if you flee), Concord patrol (clear 1–3 pirates) and bounty (named captain), pirate raid (attack a Guild convoy). Combat contracts trigger on arrival, and a Hunt or Search button retries.
+- **Shipyard:** refuel, repair hull and systems, hire crew, restock missiles.
+
 ## Story arcs (triggered by reputation)
 
 - **Navy hero**: offered a commission; pulled into hunting the region's biggest pirate lord.
@@ -128,7 +148,7 @@ Several arcs can be active in one campaign, and they can clash.
 
 1. Galaxy generation, travel and a basic trade loop. **(Built)**
 2. Ports, missions and reputation. **(Built)**
-3. Combat.
+3. Combat. **(Built)**
 4. Boarding, crew and loyalty.
 5. Insurance, death and saving.
 6. Story arcs.
