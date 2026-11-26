@@ -14,3 +14,5 @@ button:hover, button:focus { background: #2b4f8a; outline: 2px solid #9cc2ff; ou
 input, select { font: inherit; padding: 0.4rem; min-height: 40px; background: #141b2e; color: #fff; border: 1px solid #4a6fa8; border-radius: 4px; max-width: 100%; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 [role="alert"] { color: #ffcf70; }
+ul.nav { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+ul.nav button[aria-current="page"] { background: #3d6bb3; border-color: #cfe0ff; }

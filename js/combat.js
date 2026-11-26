@@ -49,7 +49,7 @@ export function hitChance(attacker, target, weaponId, range, aim) {
   const w = WEAPONS[weaponId];
   const base = w.acc[range];
   if (base <= 0) return 0;
-  let acc = base - 0.04 * effPower(target, 'engines') * target.agility;
+  let acc = base - 0.04 * effPower(target, 'engines') * target.agility + (attacker.accBonus || 0);
   if (aim !== 'hull') acc -= 0.1;
   return Math.max(0.05, Math.min(0.95, acc));
 }

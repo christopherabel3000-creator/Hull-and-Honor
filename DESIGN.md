@@ -86,6 +86,19 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **New contracts:** Guild escort (fails if you flee), Concord patrol (clear 1–3 pirates) and bounty (named captain), pirate raid (attack a Guild convoy). Combat contracts trigger on arrival, and a Hunt or Search button retries.
 - **Shipyard:** refuel, repair hull and systems, hire crew, restock missiles.
 
+## Stage 4 details (as built)
+
+- **Port views:** Bridge (status, travel, course), Contracts, Market (with price notes), Shipyard (services, outfitting, ship dealer), Crew, Records (reputation, log, game).
+- **Ship classes** (price): Mule light freighter (6,000), Swift courier (9,000), Bulwark hauler (15,000), Talon gunship (20,000), Corsair raider (18,000, pirate ports, clan Liked), Atlas heavy freighter (30,000, Concord ports, Guild Trusted), Warden frigate (38,000, Concord ports, Concord Trusted), Reaver warship (36,000, pirate ports, clan Trusted). Each comes with a starting loadout.
+- **Trade-in:** 60% of the class price (less for a damaged hull), plus half the value of added weapons and upgrades.
+- **Outfitting:** weapons fill hardpoints (sell for half price). Heavy weapons are sold only at high-security Concord ports and pirate ports. Missile racks hold 6 missiles each.
+- **Upgrades** (one of each per ship, fill upgrade slots, sell for half): armor plating, shield booster, reactor overhaul, tuned thrusters, targeting computer, cargo expansion, long-range tanks, extra crew quarters, hidden compartments (pirate and independent ports only; halves the customs catch chance).
+- **Crew:** wages of 2 credits per crew member per day, paid on each jump; unpaid wages are owed and hurt loyalty. Loyalty: devoted, loyal, content, restless, near mutiny, mutinous.
+- **Leaning:** hires at Concord ports lean lawful, at pirate ports outlaw, at independent ports mixed. Lawful crews dislike piracy, smuggling and destroying surrendered ships; outlaw crews dislike Concord work. The crew's leaning drifts toward how you act.
+- **Morale:** completed contracts and victories raise loyalty; losing your ship or surrendering lowers it. Bonuses (25 per crew; full effect once every 5 days) and shore leave (15 per crew and a day) raise it.
+- **Experience:** each victory makes the crew slightly better in boarding fights; new hires dilute it. Crew below 40 loyalty fight worse.
+- **Desertion and mutiny:** below 30 loyalty, a fifth of the crew deserts at each port. Below 15, each jump has a 40% chance of mutiny: pay them off (150 per crew), fight (losing kills you), or give up command (game over).
+
 ## Story arcs (triggered by reputation)
 
 - **Navy hero**: offered a commission; pulled into hunting the region's biggest pirate lord.
@@ -149,7 +162,7 @@ Several arcs can be active in one campaign, and they can clash.
 1. Galaxy generation, travel and a basic trade loop. **(Built)**
 2. Ports, missions and reputation. **(Built)**
 3. Combat. **(Built)**
-4. Boarding, crew and loyalty.
+4. Ships, outfitting, crew and loyalty. **(Built)**
 5. Insurance, death and saving.
 6. Story arcs.
 7. Balance and polish.
