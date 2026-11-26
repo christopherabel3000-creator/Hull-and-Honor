@@ -18,6 +18,8 @@ export const ENEMIES = {
   raider: { name: 'pirate raider', side: 'pirate', hull: 65, shield: 18, reactor: 6, agility: 1.0, weapons: ['llaser', 'lcannon', 'missile'], missiles: 3, crew: 7, skill: 1, bounty: 220 },
   marauder: { name: 'pirate marauder', side: 'pirate', hull: 95, shield: 26, reactor: 8, agility: 0.9, weapons: ['hlaser', 'lcannon', 'missile'], missiles: 5, crew: 10, skill: 1.1, bounty: 380 },
   flagship: { name: 'pirate flagship', side: 'pirate', hull: 125, shield: 32, reactor: 9, agility: 1.0, weapons: ['hlaser', 'hcannon', 'missile'], missiles: 6, crew: 13, skill: 1.2, bounty: 600 },
+  dreadnought: { name: 'pirate dreadnought', side: 'pirate', hull: 190, shield: 44, reactor: 12, agility: 0.85, weapons: ['hlaser', 'hcannon', 'missile', 'lcannon'], missiles: 8, crew: 20, skill: 1.3, bounty: 1500 },
+  hunter: { name: 'bounty hunter', side: 'concord', hull: 110, shield: 32, reactor: 10, agility: 1.3, weapons: ['hlaser', 'lcannon', 'missile'], missiles: 6, crew: 12, skill: 1.2 },
   hauler: { name: 'Guild hauler', side: 'merchant', hull: 70, shield: 14, reactor: 5, agility: 0.55, weapons: ['lcannon'], missiles: 0, crew: 5, skill: 0.9 },
   convoy: { name: 'armed Guild convoy ship', side: 'merchant', hull: 100, shield: 22, reactor: 7, agility: 0.6, weapons: ['lcannon', 'lcannon', 'missile'], missiles: 3, crew: 9, skill: 1 },
   patrol: { name: 'Concord patrol cutter', side: 'concord', hull: 90, shield: 28, reactor: 8, agility: 1.1, weapons: ['llaser', 'lcannon', 'missile'], missiles: 5, crew: 10, skill: 1.1 },
@@ -112,7 +114,8 @@ function enemyOrders(e, p, range, playerMove) {
   }
   e.power = power;
   let aim = 'hull';
-  if (e.side === 'pirate' && e.kind !== 'flagship' && p.sys.engines > 0) aim = 'engines';
+  if (e.side === 'pirate' && e.kind !== 'flagship' && e.kind !== 'dreadnought' && p.sys.engines > 0) aim = 'engines';
+  if (e.kind === 'hunter' && p.sys.engines > 0) aim = 'engines';
   if (e.side === 'concord' && p.sys.weapons > 0) aim = 'weapons';
   if (e.side === 'merchant' && p.sys.weapons > 0) aim = 'weapons';
   return { move, aim };
@@ -222,8 +225,8 @@ function surrenderCheck(e, rng) {
   const hp = e.hull / e.hullMax;
   if (e.side === 'concord') return false;
   if (e.side === 'merchant') return (hp < 0.5 || e.sys.engines === 0) && rng() < 0.6;
-  const th = e.kind === 'flagship' ? 0.2 : 0.3;
-  return (hp < th || (e.sys.engines === 0 && hp < 0.5)) && rng() < (e.kind === 'flagship' ? 0.3 : 0.45);
+  const th = e.kind === 'flagship' || e.kind === 'dreadnought' ? 0.2 : 0.3;
+  return (hp < th || (e.sys.engines === 0 && hp < 0.5)) && rng() < (e.kind === 'flagship' || e.kind === 'dreadnought' ? 0.3 : 0.45);
 }
 
 export function demandSurrenderChance(e) {
@@ -232,7 +235,7 @@ export function demandSurrenderChance(e) {
   if (e.sys.engines === 0) c += 0.25;
   if (e.sys.weapons === 0) c += 0.2;
   if (e.side === 'merchant') c += 0.25;
-  if (e.kind === 'flagship') c -= 0.2;
+  if (e.kind === 'flagship' || e.kind === 'dreadnought') c -= 0.2;
   return Math.max(0, Math.min(0.9, c));
 }
 

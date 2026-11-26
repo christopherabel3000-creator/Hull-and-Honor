@@ -133,6 +133,7 @@ export function missionTitle(m, galaxy) {
     case 'freight': return `Haul ${m.units} crates of Guild freight to ${dest}`;
     case 'dispatch': return `Carry sealed Concord dispatches to ${dest}`;
     case 'smuggle': return `Smuggle ${m.units} crates of contraband to ${dest}`;
+    case 'story': return m.title;
     case 'escort': return `Escort a Guild convoy to ${dest}`;
     case 'patrol': return `Clear ${m.count === 1 ? '1 pirate ship' : `${m.count} pirate ships`} from ${dest}`;
     case 'bounty': return `Hunt the pirate captain ${m.target} at ${dest}`;

@@ -111,7 +111,19 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **Saving:** autosave plus 3 manual save slots (Records view; overwriting asks to confirm). Saved games can be loaded from the title screen and the game over screen.
 - **One life mode** (chosen at the start): no save slots and no reloading from before a fight. Death ends the campaign for good.
 
-## Story arcs (triggered by reputation)
+## Stage 6 details (as built)
+
+Story offers appear on arrival when their conditions are met and are accepted or declined in the Contracts view. Story objectives sit in your contract list (they don't count toward the 5-contract limit and have no deadline). Choices are made in the Story part of the Contracts view. Abandoning a story objective ends that story.
+
+- **Navy hero** (Concord Trusted, at a Concord port): a reserve commission (+25% pirate bounties), report to Admiral Rhee, destroy the outpost guard of the clan you are worst with, then defeat its lord's dreadnought. Reward: 8,000 credits, Concord +20, and Hero of the Concord (+50% bounties, Warden frigate without the standing requirement).
+- **Pirate rise** (a clan Trusts you, at one of its ports): raid an armed Guild convoy, destroy a rival clan's captain, then take the clan's leadership by buying the elders' votes (12,000) or a duel with the lord's dreadnought. Reward: clan standing 100, its raiders never attack you, and 800 credits of tribute every 10 days at its ports; Concord -20, notoriety +20.
+- **Double agent** (Concord and a clan both Trust you): a blackmailer. Pay 3,000, sell out the clan (assassin follows), warn the clan (Concord hunter follows), or play both sides (50%: 6,000 credits; or both sides turn on you). Ignoring the message leaks it: both -10.
+- **Guild favorite** (Guild Trusted, at a Concord or independent port): address the council, deliver 15 of a good it wants, then deal with a rival house's bribe: expose it (5,000), take it (8,000, 50% chance the Guild finds out and the story ends), or refuse. Reward: Guild charter, +25% on Guild contracts.
+- **Wanted** (Concord Hated; starts automatically and can happen again): bounty hunters appear on 15% of jumps. A lawyer clears your name for 15,000 credits or for killing a clan butcher. Your Concord standing becomes Neutral. The story also ends if your Concord standing climbs above Hostile some other way.
+- **Clashes:** if you are in both the Navy hero and Pirate rise stories for the same clan, the next step makes you pick a side, and the other story ends.
+- New enemies: pirate dreadnought (clan lords) and bounty hunter (fast, aims for your engines; works for the Concord).
+
+## Story arcs (original outline)
 
 - **Navy hero**: offered a commission; pulled into hunting the region's biggest pirate lord.
 - **Pirate rise**: climb the clan ranks and eventually challenge for leadership.
@@ -175,5 +187,5 @@ Several arcs can be active in one campaign, and they can clash.
 3. Combat. **(Built)**
 4. Ships, outfitting, crew and loyalty. **(Built)**
 5. Insurance, death and saving. **(Built)**
-6. Story arcs.
+6. Story arcs. **(Built)**
 7. Balance and polish.

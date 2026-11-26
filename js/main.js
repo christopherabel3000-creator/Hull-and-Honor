@@ -16,6 +16,7 @@ import {
   SHIP_CLASSES, WEAPON_PRICES, HEAVY_WEAPONS, UPGRADES, portKind, weaponSummary, classSummary,
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
+import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
@@ -36,6 +37,7 @@ function ensureShip(st) {
   if (!st.crew) st.crew = { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 };
   if (!st.insurance) st.insurance = { plan: 'none', expires: 0, claims: 0 };
   if (st.debt == null) st.debt = 0;
+  ensureStory(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -44,10 +46,14 @@ function newStarterShip(crew = 6) {
 }
 
 const app = document.getElementById('app');
+const isStory = m => m.type === 'story';
+const isStoryFight = m => isStory(m) && !!m.enemy;
+const contractCount = () => state.missions.filter(m => !isStory(m)).length;
 const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
+initStory({ state: () => state, galaxy: () => galaxy, receive: (n, msgs) => receive(n, msgs), charge: (n, msgs) => charge(n, msgs), log: m => log(m) });
 const ui = { confirmSlot: null, view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
 
 // ---------- helpers ----------
@@ -93,6 +99,7 @@ function getBoard(sys) {
   const s = sysState(state, sys.id);
   if (!s.board || state.day - s.board.day >= BOARD_REFRESH_DAYS) {
     s.board = { day: state.day, missions: generateBoard(state, galaxy, sys) };
+    if (state.perks.guildCharter) for (const m of s.board.missions) if (m.faction === 'guild') m.pay = Math.round(m.pay * 1.25 / 10) * 10;
   }
   return s.board.missions;
 }
@@ -145,7 +152,9 @@ function checkDeadlines(msgs) {
 
 function autoDeliver(msgs) {
   for (const m of [...state.missions]) {
-    if (m.dest === state.location && m.type !== 'procure' && !COMBAT_TYPES.includes(m.type)) completeMission(m, msgs);
+    if (m.dest !== state.location) continue;
+    if (isStory(m)) { if (!m.enemy && !m.deliverOnly) storyMissionDone(m, msgs); continue; }
+    if (m.type !== 'procure' && !COMBAT_TYPES.includes(m.type)) completeMission(m, msgs);
   }
 }
 
@@ -184,7 +193,7 @@ function newGame(captain, ship, seedText, ironman) {
     captain: captain || 'Captain', shipName: ship || 'Wayfarer',
     ship: newStarterShip(), fuel: 12, crew: { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 },
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
-    ironman: !!ironman, insurance: { plan: 'none', expires: 0, claims: 0 }, debt: 0,
+    ironman: !!ironman, insurance: { plan: 'none', expires: 0, claims: 0 }, debt: 0, arcs: {}, perks: {},
   };
   try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ }
   ensureRep(state, galaxy);
@@ -333,12 +342,19 @@ function finishArrival(msgs) {
       autoDeliver(msgs);
       recordNotes(state, sys);
       crewArrivalChecks(msgs);
+      if (state.perks.clanLord && sys.clan === state.perks.clanLord && sys.authority.endsWith(' clan') && state.day - (state.perks.lastTribute || 0) >= 10) {
+        state.perks.lastTribute = state.day;
+        receive(800, msgs);
+        msgs.push(`The ${sys.clan} clan pays you 800 credits of tribute.`);
+      }
     }
   }
   if (state.course === state.location) {
     state.course = null;
     msgs.push('Destination reached.');
   }
+  checkTriggers(sys, msgs);
+  if (!msgs.length) msgs.push(`You are at ${sys.name}.`);
   save();
   ui.view = 'bridge';
   ui.focus = 'sys-heading';
@@ -361,7 +377,7 @@ function acceptMission(id) {
   const m = board.find(x => x.id === id);
   if (!m) return;
   if (!canTake(state, m)) { announce(`You need ${TIER_REQUIREMENT[m.tier]} standing with the ${factionName(m.faction)}.`); return; }
-  if (state.missions.length >= MAX_ACTIVE) { announce(`You can hold at most ${MAX_ACTIVE} contracts at once.`); return; }
+  if (contractCount() >= MAX_ACTIVE) { announce(`You can hold at most ${MAX_ACTIVE} contracts at once.`); return; }
   if (missionSpace(m) > freeSpace()) { announce(`Not enough hold space. This contract needs ${missionSpace(m)}, you have ${freeSpace()} free.`); return; }
   sysState(state, state.location).board.missions = board.filter(x => x !== m);
   state.missions.push(m);
@@ -380,7 +396,8 @@ function deliverProcurement(id) {
   c.qty -= m.units;
   if (c.qty <= 0) delete state.cargo[m.goodId];
   const msgs = [];
-  completeMission(m, msgs);
+  if (isStory(m)) storyMissionDone(m, msgs);
+  else completeMission(m, msgs);
   save();
   render();
   announce(msgs.join(' '));
@@ -392,12 +409,13 @@ function abandonMission(id) {
   if (ui.confirmAbandon !== id) {
     ui.confirmAbandon = id;
     render();
-    announce(`Abandoning costs standing with the ${factionName(m.faction)}. Press Confirm abandon to continue.`);
+    announce(isStory(m) ? 'Abandoning this objective ends the story for good. Press Confirm abandon to continue.' : `Abandoning costs standing with the ${factionName(m.faction)}. Press Confirm abandon to continue.`);
     return;
   }
   ui.confirmAbandon = null;
   const msgs = [];
-  failMission(m, msgs, 'abandoned');
+  if (isStory(m)) failArc(m.arc, msgs, 'You abandoned it.');
+  else failMission(m, msgs, 'abandoned');
   save();
   render();
   announce(msgs.join(' '));
@@ -610,6 +628,7 @@ function removeUpgrade(id) {
 }
 function shipRequirementMet(c, sys) {
   if (!c.req) return true;
+  if (c === SHIP_CLASSES.frigate && state.perks.concordHero) return true;
   const key = c.req.faction === 'clan' ? clanKey(sys.clan) : c.req.faction;
   return getRep(state, key) >= c.req.min;
 }
@@ -664,12 +683,19 @@ function pirateKind(sec) {
 }
 
 function missionEncounter(sys) {
-  const m = state.missions.find(x => COMBAT_TYPES.includes(x.type) && x.dest === sys.id);
+  const m = state.missions.find(x => (COMBAT_TYPES.includes(x.type) || isStoryFight(x)) && (x.dest === sys.id || (x.dest === -1 && Math.random() < 0.35)));
   if (!m) return null;
   return missionCombat(m);
 }
 
 function missionCombat(m) {
+  if (isStory(m)) {
+    const cargo = m.enemy === 'convoy' ? randomCargo(true, 10, 18) : randomCargo(false, 3, 10);
+    const enemy = makeEnemy(m.enemy, m.enemyFaction, cargo);
+    enemy.name = m.enemyName;
+    if (m.captain) enemy.captain = m.captain;
+    return { enemy, range: m.approach ? 1 : 2, approach: m.approach, missionId: m.id, intro: m.approach ? `Your target is here: the ${enemy.name}.` : `The ${enemy.name} moves to engage you.` };
+  }
   const sys = galaxy.systems[m.dest];
   const kind = missionEnemy(m);
   if (m.type === 'raid') {
@@ -686,6 +712,10 @@ function missionCombat(m) {
 }
 
 function randomEncounter(sys) {
+  if (state.arcs.wanted && state.arcs.wanted.status === 'active' && rand() < 0.15) {
+    const enemy = makeEnemy('hunter', 'concord', randomCargo(false, 0, 3));
+    return { enemy, range: 2, intro: 'A bounty hunter drops out of a jump right on top of you. Your face is on their screen.' };
+  }
   const escort = state.missions.some(m => m.type === 'escort');
   let chance = { high: 0.06, medium: 0.14, low: 0.24, none: 0.34 }[sys.security];
   if (escort) chance = Math.max(chance, 0.4);
@@ -694,7 +724,7 @@ function randomEncounter(sys) {
   if (escort && rand() < 0.75) type = 'pirate';
   if (type === 'pirate') {
     const clan = clanKey(sys.clan);
-    if (getRep(state, clan) >= 10) return { message: `Raiders of the ${sys.clan} clan recognize your ship and let you pass.` };
+    if (getRep(state, clan) >= 10 || state.perks.clanLord === sys.clan) return { message: `Raiders of the ${sys.clan} clan recognize your ship and let you pass.` };
     const enemy = makeEnemy(pirateKind(sys.security), clan, randomCargo(false, 0, 6));
     const extra = escort ? ' They are after your convoy.' : '';
     return { enemy, range: 2, intro: `Pirates! A ${sys.clan} ${enemy.name} is closing in.${extra}` };
@@ -790,7 +820,8 @@ function defeatEffects(how, msgs) {
     if (how !== 'released') {
       changeRep(state, 'concord', 2, msgs);
       if (getRep(state, 'concord') > -30) {
-        const bounty = { cutter: 120, raider: 220, marauder: 380, flagship: 600 }[e.kind];
+        const base = { cutter: 120, raider: 220, marauder: 380, flagship: 600, dreadnought: 1500 }[e.kind] || 0;
+        const bounty = Math.round(base * (state.perks.concordHero ? 1.5 : state.perks.navyCommission ? 1.25 : 1));
         receive(bounty);
         msgs.push(`The Concord pays a ${bounty} credit bounty.`);
       }
@@ -813,6 +844,8 @@ function defeatEffects(how, msgs) {
       completeMission(m, msgs);
     } else if (m.type === 'raid') {
       completeMission(m, msgs);
+    } else if (isStory(m)) {
+      storyMissionDone(m, msgs);
     }
   }
 }
@@ -1241,6 +1274,10 @@ function systemsText(c) {
 }
 
 function missionDetails(m, hops) {
+  if (isStory(m)) {
+    const where = m.dest === -1 ? 'anywhere' : m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away`;
+    return `Story, ${ARCS[m.arc].title}: ${m.title} (${where}).`;
+  }
   const dest = galaxy.systems[m.dest];
   const left = m.deadline - state.day;
   const due = left === 0 ? 'due today' : `due day ${m.deadline}, ${plural(left, 'day')} left`;
@@ -1250,17 +1287,41 @@ function missionDetails(m, hops) {
   return `${missionTitle(m, galaxy)} (${where}). For the ${factionName(m.faction)}. Pays ${m.pay}, ${due}${space}${risk}.`;
 }
 
+function storyHTML() {
+  const entries = storyEntries().filter(e => e.status !== 'active' || e.options);
+  if (!entries.length) return '';
+  const items = entries.map(e => {
+    let body = `<p>${e.title}: ${e.status === 'done' ? 'complete' : e.status === 'failed' ? 'ended' : e.status === 'declined' ? 'declined' : esc(e.text)}</p>`;
+    if (e.status === 'offered') {
+      body += `<button data-action="story-accept" data-arg="${e.id}" data-key="story-accept-${e.id}">${e.acceptLabel}</button>
+        <button data-action="story-decline" data-arg="${e.id}" data-key="story-decline-${e.id}">${e.declineLabel}</button>`;
+    }
+    if (e.options) body += e.options.map(o => `<button data-action="story-choose" data-arg="${e.id}:${o.id}" data-key="story-choose-${e.id}-${o.id}">${esc(o.label)}</button>`).join(' ');
+    return `<li>${body}</li>`;
+  }).join('');
+  return `<h3>Story</h3><ul class="cards">${items}</ul>`;
+}
+
+function storyAct(fn) {
+  const msgs = [];
+  fn(msgs);
+  save();
+  render();
+  announce(msgs.join(' '));
+}
+
 function contractsHTML() {
   const sys = here();
   const hops = hopCounts(galaxy, state.location);
   const isDocked = docked();
   const active = state.missions.map(m => {
     const btns = [];
-    if (m.dest !== state.location) btns.push(`<button data-action="plotto" data-arg="${m.dest}" data-key="plotto-${m.id}">Plot course to ${esc(galaxy.systems[m.dest].name)}</button>`);
-    if (COMBAT_TYPES.includes(m.type) && m.dest === state.location) {
-      const label = m.type === 'patrol' ? 'Hunt pirates here' : m.type === 'bounty' ? `Search for ${esc(m.target)}` : 'Search for the convoy';
+    if (m.dest !== state.location && m.dest !== -1) btns.push(`<button data-action="plotto" data-arg="${m.dest}" data-key="plotto-${m.id}">Plot course to ${esc(galaxy.systems[m.dest].name)}</button>`);
+    if ((COMBAT_TYPES.includes(m.type) || (isStoryFight(m) && m.dest !== -1)) && m.dest === state.location) {
+      const label = isStory(m) ? 'Search for your target' : m.type === 'patrol' ? 'Hunt pirates here' : m.type === 'bounty' ? `Search for ${esc(m.target)}` : 'Search for the convoy';
       btns.push(`<button data-action="hunt" data-arg="${m.id}" data-key="hunt-${m.id}">${label}</button>`);
     }
+    if (isStory(m) && m.deliverOnly && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
     if (m.type === 'procure' && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
     const confirm = ui.confirmAbandon === m.id;
     btns.push(`<button data-action="abandon" data-arg="${m.id}" data-key="abandon-${m.id}">${confirm ? 'Confirm abandon' : 'Abandon'}</button>`);
@@ -1291,7 +1352,8 @@ function contractsHTML() {
     boards += `<p>New contracts are posted every ${BOARD_REFRESH_DAYS} days.</p>`;
   }
   return `<section id="sec-contracts" aria-labelledby="h-contracts"><h2 id="h-contracts" tabindex="-1">Contracts</h2>
-    <h3>Your contracts, ${state.missions.length} of ${MAX_ACTIVE}</h3>
+    ${storyHTML()}
+    <h3>Your contracts, ${contractCount()} of ${MAX_ACTIVE}</h3>
     ${active ? `<ul class="cards">${active}</ul>` : '<p>None.</p>'}
     ${boards}</section>`;
 }
@@ -1681,6 +1743,9 @@ app.addEventListener('click', e => {
     case 'buyship': buyShip(arg); break;
     case 'mutiny': resolveMutiny(arg); break;
     case 'insure': buyInsurance(arg); break;
+    case 'story-accept': storyAct(msgs => acceptArc(arg, msgs)); break;
+    case 'story-decline': storyAct(msgs => declineArc(arg, msgs)); break;
+    case 'story-choose': { const [id, opt] = arg.split(':'); storyAct(msgs => chooseOption(id, opt, msgs)); break; }
     case 'repaydebt': repayDebt(); break;
     case 'saveslot': saveToSlot(Number(arg)); break;
     case 'loadslot': loadSlot(Number(arg)); break;
