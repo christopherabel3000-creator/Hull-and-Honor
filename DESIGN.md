@@ -111,6 +111,19 @@ Reputation is the backbone of the game. Each faction tracks your standing separa
 - **Saving:** autosave plus 3 manual save slots (Records view; overwriting asks to confirm). Saved games can be loaded from the title screen and the game over screen.
 - **One life mode** (chosen at the start): no save slots and no reloading from before a fight. Death ends the campaign for good.
 
+## Stage 7: balance and polish (first pass)
+
+- **Measured:** a median one-jump trade earns about 190 credits in the starter Mule, minus about 75 in wages and fuel. Combat simulations ran every ship class against every enemy type.
+- **Contracts** pay 25% more across the board.
+- **Ship prices** lowered: courier 8,000, hauler 13,000, gunship 17,000, corsair 15,000, Atlas 26,000, Warden 33,000, Reaver 31,000.
+- **Bounty hunters** toned down (they were beating frigates); they now chase harder instead. **Dreadnought** slightly weaker (hull 170, shields 40).
+- **Pirate encounters** scale a little with your ship: weak ships meet fewer marauders and raiders, strong ships fewer cutters.
+- **Stranded rescue:** with too little fuel to leave and no money to buy it, the Bridge offers a distress call. A Guild tug takes you to the nearest port that will take you, with 4 fuel, for 400 credits of Guild debt and 3 days.
+- **Conveniences:** Sell all cargo (Market), Refuel, repair and restock everything (Shipyard), best known sell price shown for goods in your hold, price notes split into best places to sell and cheapest places to buy.
+- **How to play** page, reachable from the title screen and the Records view.
+- **Less repetition:** the Status list no longer repeats the day, credits, fuel and hull already in the summary line. The announcement region is a polite status region.
+- **Tested:** about 10,000 random actions across five fuzz-test campaigns with no script errors.
+
 ## Captain skills (as built)
 
 Nine skills, levels 1 to 10, shown in the Captain view. Every captain starts at 1 in each with 3 skill points to spend.
@@ -210,4 +223,4 @@ Several arcs can be active in one campaign, and they can clash.
 4. Ships, outfitting, crew and loyalty. **(Built)**
 5. Insurance, death and saving. **(Built)**
 6. Story arcs. **(Built)**
-7. Balance and polish.
+7. Balance and polish. **(Built, first pass)**

@@ -3,13 +3,13 @@ import { WEAPONS } from './combat.js';
 
 export const SHIP_CLASSES = {
   mule: { name: 'Mule-class light freighter', price: 6000, hull: 60, shield: 20, reactor: 6, agility: 1.0, cargo: 20, tank: 12, hardpoints: 2, slots: 3, crew: 6, sold: ['concord', 'independent'], loadout: ['llaser', 'lcannon'] },
-  courier: { name: 'Swift-class courier', price: 9000, hull: 50, shield: 24, reactor: 7, agility: 1.5, cargo: 12, tank: 16, hardpoints: 2, slots: 3, crew: 5, sold: ['concord', 'independent'], loadout: ['llaser', 'lcannon'] },
-  hauler: { name: 'Bulwark-class hauler', price: 15000, hull: 110, shield: 26, reactor: 7, agility: 0.7, cargo: 45, tank: 14, hardpoints: 2, slots: 4, crew: 8, sold: ['concord', 'independent'], loadout: ['lcannon', 'lcannon'] },
-  gunship: { name: 'Talon-class gunship', price: 20000, hull: 95, shield: 32, reactor: 9, agility: 1.15, cargo: 16, tank: 12, hardpoints: 4, slots: 4, crew: 12, sold: ['concord', 'independent', 'clan'], loadout: ['llaser', 'lcannon', 'missile'] },
-  corsair: { name: 'Corsair-class raider', price: 18000, hull: 85, shield: 26, reactor: 8, agility: 1.3, cargo: 28, tank: 14, hardpoints: 3, slots: 4, crew: 12, sold: ['clan'], req: { faction: 'clan', min: 10 }, loadout: ['llaser', 'lcannon', 'missile'] },
-  freighter: { name: 'Atlas-class heavy freighter', price: 30000, hull: 130, shield: 30, reactor: 8, agility: 0.6, cargo: 80, tank: 16, hardpoints: 3, slots: 4, crew: 10, sold: ['concord'], req: { faction: 'guild', min: 30 }, loadout: ['lcannon', 'lcannon', 'missile'] },
-  frigate: { name: 'Warden-class frigate', price: 38000, hull: 150, shield: 40, reactor: 11, agility: 1.0, cargo: 24, tank: 14, hardpoints: 5, slots: 5, crew: 16, sold: ['concord'], req: { faction: 'concord', min: 30 }, loadout: ['hlaser', 'lcannon', 'missile'] },
-  reaver: { name: 'Reaver-class warship', price: 36000, hull: 135, shield: 34, reactor: 11, agility: 1.15, cargo: 30, tank: 14, hardpoints: 5, slots: 5, crew: 18, sold: ['clan'], req: { faction: 'clan', min: 30 }, loadout: ['hlaser', 'lcannon', 'missile'] },
+  courier: { name: 'Swift-class courier', price: 8000, hull: 50, shield: 24, reactor: 7, agility: 1.5, cargo: 12, tank: 16, hardpoints: 2, slots: 3, crew: 5, sold: ['concord', 'independent'], loadout: ['llaser', 'lcannon'] },
+  hauler: { name: 'Bulwark-class hauler', price: 13000, hull: 110, shield: 26, reactor: 7, agility: 0.7, cargo: 45, tank: 14, hardpoints: 2, slots: 4, crew: 8, sold: ['concord', 'independent'], loadout: ['lcannon', 'lcannon'] },
+  gunship: { name: 'Talon-class gunship', price: 17000, hull: 95, shield: 32, reactor: 9, agility: 1.15, cargo: 16, tank: 12, hardpoints: 4, slots: 4, crew: 12, sold: ['concord', 'independent', 'clan'], loadout: ['llaser', 'lcannon', 'missile'] },
+  corsair: { name: 'Corsair-class raider', price: 15000, hull: 85, shield: 26, reactor: 8, agility: 1.3, cargo: 28, tank: 14, hardpoints: 3, slots: 4, crew: 12, sold: ['clan'], req: { faction: 'clan', min: 10 }, loadout: ['llaser', 'lcannon', 'missile'] },
+  freighter: { name: 'Atlas-class heavy freighter', price: 26000, hull: 130, shield: 30, reactor: 8, agility: 0.6, cargo: 80, tank: 16, hardpoints: 3, slots: 4, crew: 10, sold: ['concord'], req: { faction: 'guild', min: 30 }, loadout: ['lcannon', 'lcannon', 'missile'] },
+  frigate: { name: 'Warden-class frigate', price: 33000, hull: 150, shield: 40, reactor: 11, agility: 1.0, cargo: 24, tank: 14, hardpoints: 5, slots: 5, crew: 16, sold: ['concord'], req: { faction: 'concord', min: 30 }, loadout: ['hlaser', 'lcannon', 'missile'] },
+  reaver: { name: 'Reaver-class warship', price: 31000, hull: 135, shield: 34, reactor: 11, agility: 1.15, cargo: 30, tank: 14, hardpoints: 5, slots: 5, crew: 18, sold: ['clan'], req: { faction: 'clan', min: 30 }, loadout: ['hlaser', 'lcannon', 'missile'] },
 };
 
 export const WEAPON_PRICES = { llaser: 600, lcannon: 700, missile: 1200, hlaser: 2400, hcannon: 2800 };

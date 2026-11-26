@@ -101,7 +101,7 @@ function getBoard(sys) {
   if (!s.board || state.day - s.board.day >= BOARD_REFRESH_DAYS) {
     s.board = { day: state.day, missions: generateBoard(state, galaxy, sys) };
     if (state.perks.guildCharter) for (const m of s.board.missions) if (m.faction === 'guild') m.pay = Math.round(m.pay * 1.25 / 10) * 10;
-    const neg = 1 + sk('negotiation') * 0.02;
+    const neg = 1.25 * (1 + sk('negotiation') * 0.02);
     for (const m of s.board.missions) m.pay = Math.round(m.pay * neg / 10) * 10;
   }
   return s.board.missions;
@@ -291,6 +291,49 @@ function sell(goodId, all) {
   save();
   render();
   announce([`Sold ${sold} ${g.name} for ${earned}, ${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}. Credits ${state.credits}.`, ...tmsgs].join(' '));
+}
+
+function sellAllCargo() {
+  const sys = here();
+  let earned = 0, profit = 0, n = 0;
+  const msgs = [];
+  for (const g of GOODS) {
+    const c = state.cargo[g.id];
+    if (!c || (g.illegal && !hasBlackMarket(sys))) continue;
+    while (c.qty > 0) {
+      const p = prices(state, sys, g).sell;
+      const avg = c.cost / c.qty;
+      earned += p; profit += p - avg; n++;
+      state.credits += p; c.cost -= avg; c.qty--;
+      nudge(state, sys.id, g.id, -1);
+    }
+    delete state.cargo[g.id];
+  }
+  if (!n) return;
+  profit = Math.round(profit);
+  if (profit > 0) gainXP('trading', Math.ceil(profit / 150), msgs);
+  recordNotes(state, sys);
+  log(`Sold ${n} units of cargo for ${earned} credits at ${sys.name}.`);
+  save(); render();
+  announce([`Sold ${n} units for ${earned}, ${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}. Credits ${state.credits}.`, ...msgs].join(' '));
+}
+
+function serviceAll() {
+  const sh = state.ship, sys = here();
+  const msgs = [];
+  let spent = 0;
+  const fp = fuelPrice(sys);
+  while (state.fuel < sh.tank && state.credits >= fp) { state.fuel++; state.credits -= fp; spent += fp; }
+  const hp = hullRepairPrice(sys);
+  let hulls = 0;
+  while (sh.hull < sh.hullMax && state.credits >= hp) { sh.hull++; state.credits -= hp; spent += hp; hulls++; }
+  if (hulls) gainXP('repairs', 1, msgs);
+  for (const x of SYSTEMS) while (sh.sys[x] < 3 && state.credits >= sysRepairPrice()) { sh.sys[x]++; state.credits -= sysRepairPrice(); spent += sysRepairPrice(); }
+  const mp = MISSILE_PRICE;
+  while (sh.missiles < sh.missilesMax && state.credits >= mp) { sh.missiles++; state.credits -= mp; spent += mp; }
+  const done = state.fuel >= sh.tank && sh.hull >= sh.hullMax && SYSTEMS.every(x => sh.sys[x] === 3) && sh.missiles >= sh.missilesMax;
+  save(); render();
+  announce([spent ? `Spent ${spent} credits.` : 'Nothing needed.', done ? 'Your ship is fully serviced.' : 'You ran out of credits before everything was done.', ...msgs].join(' '));
 }
 
 function refuel(full, emergency) {
@@ -809,8 +852,14 @@ function randomCargo(legalOnly, min, max) {
   return Object.entries(cargo).map(([goodId, qty]) => ({ goodId, qty }));
 }
 
+// Pirate strength depends on how lawless the system is, and a little on how dangerous your ship looks.
 function pirateKind(sec) {
-  return pickW({ high: { cutter: 1 }, medium: { cutter: 6, raider: 4 }, low: { cutter: 3, raider: 5, marauder: 2 }, none: { cutter: 2, raider: 5, marauder: 3 } }[sec]);
+  const w = { high: { cutter: 1 }, medium: { cutter: 6, raider: 4 }, low: { cutter: 3, raider: 5, marauder: 2 }, none: { cutter: 2, raider: 5, marauder: 3 } }[sec];
+  const strong = state.ship.hullMax + state.ship.shieldMax >= 120;
+  const out = { ...w };
+  if (!strong) { if (out.marauder) out.marauder *= 0.3; if (out.raider) out.raider *= 0.7; }
+  else if (out.cutter) out.cutter *= 0.6;
+  return pickW(out);
 }
 
 function missionEncounter(sys) {
@@ -1367,6 +1416,7 @@ function titleHTML() {
   for (let i = 1; i <= SLOT_COUNT; i++) if (readKey(slotKey(i))) { slots = `<section aria-labelledby="h-slots"><h2 id="h-slots">Saved games</h2>${slotsHTML(true)}</section>`; break; }
   return `<h1 id="title-heading" tabindex="-1">Hull and Honor</h1>
     <p>Trade, smuggle, raid or hunt pirates across a lawless galaxy. Your reputation decides who welcomes you and who wants you dead.</p>
+    <button data-action="help" data-key="help">How to play</button>
     ${cont}${slots}
     <section aria-labelledby="h-new"><h2 id="h-new">New campaign</h2>
       <form id="new-form">
@@ -1403,16 +1453,41 @@ function statusHTML() {
     course = `<li>Course to ${esc(galaxy.systems[state.course].name)}: ${plural(path.length - 1, 'jump')}, ${ly.toFixed(1)} light-years, ${fuel} fuel, about ${plural(days, 'day')}.</li>`;
   }
   return `<section id="sec-status" aria-labelledby="h-status"><h2 id="h-status" tabindex="-1">Status</h2><ul>
-    <li>Day ${state.day}</li>
-    <li>Credits: ${state.credits}</li>
-    <li>Fuel: ${state.fuel} of ${state.ship.tank}</li>
-    <li>Hold: ${holdUsed()} of ${state.ship.cargo}: ${holdContents()}</li>
+    <li>Hold: ${holdContents()}</li>
     <li>Ship: the ${esc(state.shipName)}, ${state.ship.cls}</li>
-    <li>Hull: ${state.ship.hull} of ${state.ship.hullMax}</li>
     <li>Systems: ${systemsText(state.ship)}</li>
     <li>Crew: ${state.ship.crew} of ${state.ship.crewMax}</li>
     <li>Insurance: ${state.insurance.plan === 'none' ? 'none' : `${INSURANCE[state.insurance.plan].name.toLowerCase()} until day ${state.insurance.expires}`}${state.debt ? `. Guild debt ${state.debt}` : ''}</li>
-    ${course}</ul></section>`;
+    ${course}</ul>${strandedHTML()}</section>`;
+}
+
+// Stuck with no fuel to reach anywhere and no money to buy it.
+function stranded() {
+  const cheapest = Math.min(...galaxy.adj[state.location].map(l => navCost(l.ly).fuel));
+  if (state.fuel >= cheapest) return false;
+  const price = fuelPrice(here()) * (docked() ? 1 : 3);
+  return state.credits < (cheapest - state.fuel) * price;
+}
+function strandedHTML() {
+  if (!stranded()) return '';
+  return `<p>You don't have the fuel or the credits to leave.</p>
+    <button data-action="distress" data-key="distress">Send a distress call for a tow, 400 credits added to your Guild debt</button>`;
+}
+function distressCall() {
+  if (!stranded()) return;
+  const msgs = [];
+  const hops = hopCounts(galaxy, state.location);
+  const order = galaxy.systems.map(x => x.id).filter(id => id !== state.location && hops[id] < Infinity).sort((a, b) => hops[a] - hops[b]);
+  const port = order.find(id => dockingStatus(state, galaxy.systems[id]).ok) ?? state.location;
+  state.debt += 400;
+  state.day += 3;
+  payWages(3, msgs);
+  checkDeadlines(msgs);
+  state.fuel = Math.max(state.fuel, Math.min(state.ship.tank, 4));
+  arrive(port);
+  msgs.unshift(`A Guild tug tows you to ${here().name} and leaves you 4 fuel. You owe the Guild ${state.debt} credits.`);
+  log(`Towed to ${here().name}.`);
+  finishArrival(msgs);
 }
 
 function systemsText(c) {
@@ -1507,11 +1582,16 @@ function contractsHTML() {
 
 function marketHTML() {
   const sys = here();
+  const hopsHere = hopCounts(galaxy, state.location);
   const items = GOODS.filter(g => !g.illegal || hasBlackMarket(sys)).map(g => {
     const p = prices(state, sys, g);
     const tag = tradeTag(sys, g);
     const c = state.cargo[g.id];
-    const held = c ? `. In hold: ${c.qty}, paid ${Math.round(c.cost / c.qty)} each` : '';
+    let held = '';
+    if (c) {
+      const best = bestSellElsewhere(g.id, hopsHere);
+      held = `. In hold: ${c.qty}, paid ${Math.round(c.cost / c.qty)} each${best ? `. Best known: sells for ${best.n.sell} at ${esc(galaxy.systems[best.id].name)}, ${plural(hopsHere[best.id], 'jump')} away` : ''}`;
+    }
     const sellBtns = c
       ? `<button data-action="sell1" data-arg="${g.id}" data-key="sell1-${g.id}" aria-label="Sell 1 ${g.name}">Sell 1</button>
          <button data-action="sellall" data-arg="${g.id}" data-key="sellall-${g.id}" aria-label="Sell all ${g.name}">Sell all</button>` : '';
@@ -1521,8 +1601,10 @@ function marketHTML() {
       ${sellBtns}</li>`;
   }).join('');
   const note = hasBlackMarket(sys) ? '' : '<p>Contraband cannot be traded in Concord ports.</p>';
+  const sellable = GOODS.filter(g => state.cargo[g.id] && (!g.illegal || hasBlackMarket(sys)));
+  const sellAll = sellable.length > 1 ? `<button data-action="sellcargo" data-key="sellcargo">Sell all cargo you can sell here</button>` : '';
   return `<section id="sec-market" aria-labelledby="h-market"><h2 id="h-market" tabindex="-1">Market</h2>
-    ${note}<ul class="cards">${items}</ul></section>`;
+    ${note}${sellAll}<ul class="cards">${items}</ul></section>`;
 }
 
 function servicesHTML() {
@@ -1535,6 +1617,7 @@ function servicesHTML() {
   const misNeed = sh.missilesMax - sh.missiles;
   return `<section id="sec-services" aria-labelledby="h-services"><h2 id="h-services" tabindex="-1">Shipyard</h2>
     <p>Credits ${state.credits}. Fuel ${price} per unit, hull repair ${hullRepairPrice(sys)} per point, system repair ${sysRepairPrice()} per level.</p>
+    <button data-action="serviceall" data-key="serviceall">Refuel, repair and restock everything</button>
     <button data-action="refuel" data-key="refuel">Refuel to full${need ? `, ${need * price} credits` : ''}</button>
     <button data-action="fuel1" data-key="fuel1">Buy 1 fuel</button>
     ${hullNeed ? `<button data-action="repairhull" data-key="repairhull">Repair hull, ${hullNeed * hullRepairPrice(sys)} credits</button>` : ''}
@@ -1620,6 +1703,25 @@ function combatHTML() {
       ${surrender}</section>`;
 }
 
+
+function helpHTML() {
+  return `<h1 id="help-heading" tabindex="-1">How to play</h1>
+    <button data-action="helpback" data-key="helpback">Back</button>
+    <h2>Getting around</h2>
+    <p>Each port screen has a row of view buttons: Bridge, Contracts, Market, Shipyard, Captain, Crew and Records. The Bridge lists jump lanes to neighboring systems, with fuel, days and what kind of place each one is. Plot a course to any system and the Bridge offers its next jump. Each jump costs fuel, days and crew wages.</p>
+    <h2>Making money</h2>
+    <p>Buy goods marked local product, and sell them where they are in demand. Price notes in the Market view remember prices at systems you have visited. Buying or selling a lot moves prices against you, and they recover over a few days. Contracts pay more as your standing with a faction rises. Contraband sells only outside Concord ports, and customs at Concord ports may catch you.</p>
+    <h2>Reputation</h2>
+    <p>The Merchant Guild, the Concord and four pirate clans each track your standing, and so does every port. Helping one side often hurts another. High standing opens better contracts, ships and stories. Low standing closes ports, and very low standing gets you hunted, or executed if you're captured.</p>
+    <h2>Combat</h2>
+    <p>Fights happen at four ranges: close, medium, long and extreme. Each turn, set your maneuver, target and reactor power, then press Fire and maneuver. Your orders stay set until you change them. Lasers are best close, cannons at medium, missiles at long range. Pull back at extreme range to escape. Knock out an enemy's engines to stop them fleeing and to board them. Running is often the smart choice in a weak ship.</p>
+    <h2>Captain and crew</h2>
+    <p>Captain skills grow as you use them, from trainers at ports, and from skill points earned through stories and contracts. Your crew needs wages and cares how you behave: lawful crews dislike piracy, outlaw crews dislike Concord work. Low loyalty leads to desertion, then mutiny.</p>
+    <h2>Losing</h2>
+    <p>If your ship is destroyed you escape in a pod, unless a faction that hates you catches it. Insurance from the Merchant Guild replaces your ship. Without it you start over in a battered freighter and may end up in debt. Losing a boarding fight or a mutiny kills you. Use save slots in Records, or start in one life mode for no second chances.</p>
+    <button data-action="helpback" data-key="helpback-end">Back</button>`;
+}
+
 function gameOverHTML() {
   const backup = (() => { try { return localStorage.getItem(PREFIGHT_KEY); } catch (e) { return null; } })();
   return `<h1 id="over-heading" tabindex="-1">Game over</h1>
@@ -1681,26 +1783,34 @@ function courseHTML() {
     <button data-action="plot" data-key="plot">Plot course</button> ${clear}</section>`;
 }
 
+function knownPrices(goodId) {
+  return Object.entries(state.systems)
+    .filter(([id, x]) => x.notes && x.notes[goodId] && Number(id) !== state.location)
+    .map(([id, x]) => ({ id: Number(id), n: x.notes[goodId] }));
+}
+function bestSellElsewhere(goodId, hops) {
+  const list = knownPrices(goodId).filter(r => hops[r.id] < Infinity).sort((a, b) => b.n.sell - a.n.sell);
+  return list[0] || null;
+}
+
 function priceNotesHTML() {
   const g = good(ui.priceGood);
   const hops = hopCounts(galaxy, state.location);
-  const rows = Object.entries(state.systems)
-    .filter(([, s]) => s.notes && s.notes[g.id])
-    .map(([id, s]) => ({ id: Number(id), n: s.notes[g.id] }))
-    .sort((a, b) => b.n.sell - a.n.sell)
-    .slice(0, 15)
-    .map(({ id, n }) => {
-      const s = galaxy.systems[id];
-      const age = state.day - n.day;
-      const when = id === state.location ? 'here now' : age === 0 ? 'today' : `${plural(age, 'day')} ago`;
-      const away = id === state.location ? '' : `, ${plural(hops[id], 'jump')} away`;
-      return `<li>${esc(s.name)}: buy ${n.buy}, sell ${n.sell}, ${when}${away}.</li>`;
-    }).join('');
+  const row = ({ id, n }) => {
+    const age = state.day - n.day;
+    const when = age === 0 ? 'today' : `${plural(age, 'day')} ago`;
+    return `<li>${esc(galaxy.systems[id].name)}: buy ${n.buy}, sell ${n.sell}, ${when}, ${plural(hops[id], 'jump')} away.</li>`;
+  };
+  const known = knownPrices(g.id);
+  const sells = [...known].sort((a, b) => b.n.sell - a.n.sell).slice(0, 6).map(row).join('');
+  const buys = [...known].sort((a, b) => a.n.buy - b.n.buy).slice(0, 6).map(row).join('');
+  const hereP = docked() && (!g.illegal || hasBlackMarket(here())) ? prices(state, here(), g) : null;
   const opts = GOODS.map(x => `<option value="${x.id}"${x.id === g.id ? ' selected' : ''}>${x.name}</option>`).join('');
   return `<section id="sec-notes" aria-labelledby="h-notes"><h2 id="h-notes" tabindex="-1">Price notes</h2>
-    <p>Last known prices at systems you have visited, best selling price first.</p>
+    <p>Last known prices at other systems you have visited.</p>
     <p><label for="notes-select">Good</label><br><select id="notes-select" data-change="pricegood" data-key="pricegood">${opts}</select></p>
-    ${rows ? `<ul>${rows}</ul>` : '<p>No prices noted yet.</p>'}</section>`;
+    ${hereP ? `<p>Here: buy ${hereP.buy}, sell ${hereP.sell}.</p>` : ''}
+    ${known.length ? `<h3>Best places to sell</h3><ul>${sells}</ul><h3>Cheapest places to buy</h3><ul>${buys}</ul>` : '<p>No prices noted yet.</p>'}</section>`;
 }
 
 function logHTML() {
@@ -1829,6 +1939,7 @@ function gameHTML() {
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
+      <button data-action="help" data-key="help-records">How to play</button>
       <button data-action="title" data-key="title">Return to title screen</button></section>
       ${state.ironman ? '' : `<section id="sec-saves" aria-labelledby="h-saves"><h2 id="h-saves" tabindex="-1">Saved games</h2>${slotsHTML(false)}</section>`}`; break;
     default: view = `${isDocked ? '' : refusedHTML()}${statusHTML()}${travelHTML()}${courseHTML()}`;
@@ -1846,7 +1957,7 @@ function render() {
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
   if (ui.screen === 'game') save();
-  app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : gameHTML();
+  app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : ui.screen === 'help' ? helpHTML() : gameHTML();
   let target = null;
   if (ui.focus === 'view-first') { target = app.querySelector('#view h2'); ui.focus = null; }
   else if (ui.focus) { target = document.getElementById(ui.focus); ui.focus = null; }
@@ -1907,6 +2018,11 @@ app.addEventListener('click', e => {
     case 'c-turn': combatAction('fire'); break;
     case 'c-demand': combatAction('demand'); break;
     case 'c-repair': combatAction('repair'); break;
+    case 'sellcargo': sellAllCargo(); break;
+    case 'serviceall': serviceAll(); break;
+    case 'distress': distressCall(); break;
+    case 'help': ui.helpFrom = ui.screen; ui.screen = 'help'; ui.focus = 'help-heading'; render(); break;
+    case 'helpback': ui.screen = ui.helpFrom || 'title'; ui.focus = ui.screen === 'title' ? 'title-heading' : 'view-first'; render(); break;
     case 'spendpoint': spendPoint(arg); break;
     case 'train': trainSkill(arg); break;
     case 'c-board': combatAction('board'); break;

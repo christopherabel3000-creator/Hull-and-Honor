@@ -18,8 +18,8 @@ export const ENEMIES = {
   raider: { name: 'pirate raider', side: 'pirate', hull: 65, shield: 18, reactor: 6, agility: 1.0, weapons: ['llaser', 'lcannon', 'missile'], missiles: 3, crew: 7, skill: 1, bounty: 220 },
   marauder: { name: 'pirate marauder', side: 'pirate', hull: 95, shield: 26, reactor: 8, agility: 0.9, weapons: ['hlaser', 'lcannon', 'missile'], missiles: 5, crew: 10, skill: 1.1, bounty: 380 },
   flagship: { name: 'pirate flagship', side: 'pirate', hull: 125, shield: 32, reactor: 9, agility: 1.0, weapons: ['hlaser', 'hcannon', 'missile'], missiles: 6, crew: 13, skill: 1.2, bounty: 600 },
-  dreadnought: { name: 'pirate dreadnought', side: 'pirate', hull: 190, shield: 44, reactor: 12, agility: 0.85, weapons: ['hlaser', 'hcannon', 'missile', 'lcannon'], missiles: 8, crew: 20, skill: 1.3, bounty: 1500 },
-  hunter: { name: 'bounty hunter', side: 'concord', hull: 110, shield: 32, reactor: 10, agility: 1.3, weapons: ['hlaser', 'lcannon', 'missile'], missiles: 6, crew: 12, skill: 1.2 },
+  dreadnought: { name: 'pirate dreadnought', side: 'pirate', hull: 170, shield: 40, reactor: 12, agility: 0.85, weapons: ['hlaser', 'hcannon', 'missile', 'lcannon'], missiles: 8, crew: 20, skill: 1.3, bounty: 1500 },
+  hunter: { name: 'bounty hunter', side: 'concord', hull: 80, shield: 22, reactor: 8, agility: 1.25, weapons: ['llaser', 'lcannon', 'missile'], missiles: 4, crew: 10, skill: 1.15 },
   hauler: { name: 'Guild hauler', side: 'merchant', hull: 70, shield: 14, reactor: 5, agility: 0.55, weapons: ['lcannon'], missiles: 0, crew: 5, skill: 0.9 },
   convoy: { name: 'armed Guild convoy ship', side: 'merchant', hull: 100, shield: 22, reactor: 7, agility: 0.6, weapons: ['lcannon', 'lcannon', 'missile'], missiles: 3, crew: 9, skill: 1 },
   patrol: { name: 'Concord patrol cutter', side: 'concord', hull: 90, shield: 28, reactor: 8, agility: 1.1, weapons: ['llaser', 'lcannon', 'missile'], missiles: 5, crew: 10, skill: 1.1 },
@@ -104,7 +104,7 @@ function enemyOrders(e, p, range, playerMove) {
     power.weapons = Math.min(MAX_POWER_PER_SYSTEM, left);
   } else if (playerMove === 1 && range >= 2) {
     // Chase a fleeing target.
-    power.engines = Math.min(3, left - 2); left -= power.engines;
+    power.engines = Math.min(e.kind === 'hunter' ? 4 : 3, left - 2); left -= power.engines;
     power.weapons = Math.min(MAX_POWER_PER_SYSTEM, weaponNeed, left); left -= power.weapons;
     power.shields = Math.min(MAX_POWER_PER_SYSTEM, left);
     move = -1;
