@@ -221,7 +221,7 @@ Several arcs can be active in one campaign, and they can clash.
 9. Galaxy events (famines, plagues, booms, blockades) and faction wars. **(Built)**
 10. Rival captains. **(Built)**
 11. Officers with personalities, and mission twists. **(Built)**
-12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights).
+12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights). **(Built)**
 
 ## Stage 8 details (as built)
 
@@ -266,6 +266,17 @@ Several arcs can be active in one campaign, and they can clash.
   - Rush: the client offers 50% more if you arrive by an earlier day.
   - Double-cross: at delivery, the client offers half pay. Take it, lean on them (negotiation), or keep the freight.
   - Ambush: someone is waiting at the destination: pirates, or a bounty hunter for smuggling jobs.
+
+## Stage 12 details (as built)
+
+- **Holdings view.** Payments and losses happen every 10 days and are announced on your next arrival.
+- **Warehouses:** up to 4, one per port, 60 units each, costing 1,200 to 2,500 by security. Store and load goods while docked there. Warehouses at low and no security ports have a 12% chance each period of losing a quarter of their contents to thieves.
+- **Guild shipping lines:** buy and sell shares at Guild offices (sell at 98% of the price). Core Express (steady, 1% dividend per period), Frontier Freight (2.2%, more volatile), Rimward Ventures (4%, very volatile, frequent crashes). Wars and pirate surges drag the riskier lines down; a crash cuts a line's price by 40%.
+- **Station:** 60,000 credits at an independent port, one per captain. Earns 900 credits per period plus 500 per market hub level, halved when its region has a war front, blockade or pirate surge. Pirate raids (20% per period, 6% less per defense level) take that period's income and may wreck an upgrade. Upgrades: market hub (3 levels), defense grid (3 levels), private shipyard (free fuel and repairs there).
+- **Cantina view** (docked):
+  - Starjack: blackjack against a dealer who stands on 17, with bets of 50 to 500. Starjack pays 3 to 2. Palm a card with deception for a perfect draw; get caught and you lose the bet, pay a fine, lose local standing and are banned from that port's tables for 10 days.
+  - Void Dice: push your luck. Add up rolls; a 1 busts. When you stop, the house must beat you without busting.
+  - Pit fights (not in Concord ports): three opponents with entry fees and purses (50/150, 150/450, 400/1,400). Choose strike, guard or feint each round; ties go to dueling skill. First to land three blows wins. Winning lifts crew morale; every round teaches dueling.
 
 ## Build plan (proposed)
 

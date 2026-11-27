@@ -17,6 +17,8 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
+import { initHoldings, ensureHoldings, tickHoldings, takePending, netWorth, storedUnits, WAREHOUSE_CAP, MAX_WAREHOUSES, warehouseCost, LINES, STATION_COST, STATION_UPGRADES } from './holdings.js';
+import { startStarjack, starjackHit, starjackStand, bestCard, handTotal, startDice, diceRoll, diceStop, PIT_TIERS, startPit, pitRound } from './games.js';
 import { initOfficers, ensureOfficers, officerBonus, officerWages, moraleName, officerBoard, hireOfficer, dismissOfficer, officerReact, officerDepartures, maybePersonalFavor, personalDone, personalAbandoned, ROLES, TRAITS, MAX_OFFICERS } from './officers.js';
 import { retireRival, initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
 import { initWorld, news as pushNews, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
@@ -47,6 +49,7 @@ function ensureShip(st) {
   ensureWorld(st);
   ensureRivals(st);
   ensureOfficers(st);
+  ensureHoldings(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -66,6 +69,7 @@ let state = null;
 let galaxy = null;
 initWorld({ state: () => state, galaxy: () => galaxy });
 initOfficers({ state: () => state, galaxy: () => galaxy });
+initHoldings({ state: () => state, galaxy: () => galaxy, news: t => pushNews(t), regionTrouble: id => !!(frontWarAt(id) || surgeAt(galaxy.systems[id]) || blockadeAt(id)) });
 initRivals({ state: () => state, galaxy: () => galaxy, news: t => pushNews(t) });
 initEvents({
   state: () => state, here: () => here(), sk: id => sk(id), gainXP: (id, n, o) => gainXP(id, n, o),
@@ -337,6 +341,7 @@ function newGame(captain, ship, seedText, ironman) {
   ensureRep(state, galaxy);
   ensureRivals(state);
   ensureOfficers(state);
+  ensureHoldings(state);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
   save();
@@ -455,7 +460,7 @@ function serviceAll() {
   const sh = state.ship, sys = here();
   const msgs = [];
   let spent = 0;
-  const fp = fuelPrice(sys);
+  const fp = myFuelPrice(sys);
   while (state.fuel < sh.tank && state.credits >= fp) { state.fuel++; state.credits -= fp; spent += fp; }
   const hp = hullRepairPrice(sys);
   let hulls = 0;
@@ -470,7 +475,7 @@ function serviceAll() {
 }
 
 function refuel(full, emergency) {
-  const price = fuelPrice(here()) * (emergency ? 3 : 1);
+  const price = myFuelPrice(here()) * (emergency ? 3 : 1);
   let units = 0;
   while (state.fuel < state.ship.tank && state.credits >= price) {
     state.fuel++;
@@ -499,7 +504,7 @@ function jump(to) {
   gainXP('navigation', 1 + Math.floor(lane.ly / 5));
   state.fuel -= cost.fuel;
   state.day += cost.days;
-  advanceWorld(); tickRivals();
+  advanceWorld(); tickRivals(); tickHoldings();
   ui.confirmAbandon = null;
   const msgs = [];
   payWages(cost.days, msgs);
@@ -554,11 +559,14 @@ function finishArrival(msgs) {
     msgs.push('Destination reached.');
   }
   checkTriggers(sys, msgs);
+  const held = takePending();
+  if (held.length) msgs.push(`Holdings: ${held.join(' ')}`);
   const fresh = freshNews();
   if (fresh.length) msgs.push(`News: ${fresh.join(' ')}`);
   if (!msgs.length) msgs.push(`You are at ${sys.name}.`);
   save();
   ui.view = 'bridge';
+  ui.game = null;
   ui.focus = 'sys-heading';
   render();
   announce(msgs.join(' '));
@@ -1670,8 +1678,10 @@ function setPower(sysName, delta) {
 }
 
 // ---------- shipyard ----------
-const repairDiscount = () => 1 - sk('repairs') * 0.04;
-const hullRepairPrice = sys => Math.max(1, Math.round({ high: 5, medium: 7, low: 9, none: 11 }[sys.security] * repairDiscount()));
+const atOwnShipyard = () => !!(state.holdings && state.holdings.station && state.holdings.station.sys === state.location && state.holdings.station.upgrades.shipyard);
+const myFuelPrice = sys => (atOwnShipyard() && sys.id === state.location ? 0 : fuelPrice(sys));
+const repairDiscount = () => (atOwnShipyard() ? 0 : 1 - sk('repairs') * 0.04);
+const hullRepairPrice = sys => (atOwnShipyard() ? 0 : 1) * Math.max(1, Math.round({ high: 5, medium: 7, low: 9, none: 11 }[sys.security] * repairDiscount()));
 const sysRepairPrice = () => Math.round(40 * repairDiscount());
 const CREW_PRICE = 50, MISSILE_PRICE = 30;
 
@@ -1796,6 +1806,222 @@ function salvageHTML() {
     <p>Section ${sv.depth} explored. Haul so far: ${haul}. Crew ${state.ship.crew}, hull ${state.ship.hull} of ${state.ship.hullMax}.</p>
     ${sv.over ? '' : `<button data-action="sv-deeper" data-key="sv-deeper">Push deeper, about ${d}% risk of trouble</button>`}
     <button data-action="sv-leave" data-key="sv-leave">Return to your ship with the haul</button>`;
+}
+
+
+// ---------- holdings ----------
+function holdingsAct(fn) {
+  const out = [];
+  fn(out);
+  save(); render();
+  announce(out.join(' '));
+}
+function buyWarehouse(out) {
+  const h = state.holdings, sys = here();
+  if (h.warehouses[sys.id]) return;
+  if (Object.keys(h.warehouses).length >= MAX_WAREHOUSES) { out.push(`You can own at most ${MAX_WAREHOUSES} warehouses.`); return; }
+  const cost = warehouseCost(sys);
+  if (state.credits < cost) { out.push(`A warehouse here costs ${cost}.`); return; }
+  state.credits -= cost;
+  h.warehouses[sys.id] = { goods: {} };
+  log(`Bought a warehouse at ${sys.name}.`);
+  out.push(`You buy a warehouse at ${sys.name} for ${cost}. It holds ${WAREHOUSE_CAP} units.`);
+}
+function storeGoods(gid, out) {
+  const w = state.holdings.warehouses[state.location];
+  const c = state.cargo[gid];
+  if (!w || !c) return;
+  const n = Math.min(c.qty, WAREHOUSE_CAP - storedUnits(w));
+  if (n <= 0) { out.push('The warehouse is full.'); return; }
+  c.cost -= (c.cost / c.qty) * n;
+  c.qty -= n;
+  if (c.qty <= 0) delete state.cargo[gid];
+  w.goods[gid] = (w.goods[gid] || 0) + n;
+  out.push(`Stored ${n} ${good(gid).name}.`);
+}
+function retrieveGoods(gid, out) {
+  const w = state.holdings.warehouses[state.location];
+  if (!w || !w.goods[gid]) return;
+  const n = Math.min(w.goods[gid], freeSpace());
+  if (n <= 0) { out.push('Your hold is full.'); return; }
+  w.goods[gid] -= n;
+  if (w.goods[gid] <= 0) delete w.goods[gid];
+  const slot = state.cargo[gid] || (state.cargo[gid] = { qty: 0, cost: 0 });
+  slot.qty += n;
+  out.push(`Loaded ${n} ${good(gid).name} into your hold.`);
+}
+function trade_shares(id, n, out) {
+  const h = state.holdings, L = h.lines[id];
+  if (!offices(here()).includes('guild') || !docked()) { out.push('Shares are traded at Merchant Guild offices.'); return; }
+  if (n > 0) {
+    const k = Math.min(n, Math.floor(state.credits / L.price));
+    if (k <= 0) { out.push(`One share costs ${L.price}.`); return; }
+    state.credits -= k * L.price;
+    h.shares[id] = (h.shares[id] || 0) + k;
+    out.push(`Bought ${plural(k, 'share')} of ${LINES[id].name} for ${k * L.price}.`);
+  } else {
+    const k = Math.min(-n, h.shares[id] || 0);
+    if (!k) return;
+    const each = Math.round(L.price * 0.98);
+    state.credits += k * each;
+    h.shares[id] -= k;
+    out.push(`Sold ${plural(k, 'share')} of ${LINES[id].name} for ${k * each}.`);
+  }
+}
+function buyStation(out) {
+  const h = state.holdings, sys = here();
+  if (h.station) return;
+  if (sys.authority !== 'Independent' || !docked()) { out.push('Stations can only be bought at independent ports.'); return; }
+  if (state.debt > 0) { out.push('The Guild will not sell to you while you owe it money.'); return; }
+  if (state.credits < STATION_COST) { out.push(`A station costs ${STATION_COST}.`); return; }
+  state.credits -= STATION_COST;
+  h.station = { sys: sys.id, name: `${state.captain}'s Haven`, upgrades: { market: 0, defense: 0, shipyard: 0 } };
+  changeLocal(state, galaxy, sys.id, 20, out);
+  pushNews(`Captain ${state.captain} has bought a station at ${sys.name}: ${h.station.name}.`);
+  log(`Bought ${h.station.name} at ${sys.name}.`);
+  out.push(`${h.station.name} at ${sys.name} is yours. It earns money every 10 days.`);
+}
+function upgradeStation(k, out) {
+  const stn = state.holdings.station, u = STATION_UPGRADES[k];
+  if (!stn || stn.sys !== state.location) return;
+  const lvl = stn.upgrades[k];
+  if (lvl >= u.max) { out.push(`${u.name} is fully built.`); return; }
+  const cost = u.cost(lvl);
+  if (state.credits < cost) { out.push(`That costs ${cost}.`); return; }
+  state.credits -= cost;
+  stn.upgrades[k]++;
+  out.push(`${u.name} built to level ${stn.upgrades[k]} for ${cost}.`);
+}
+
+function holdingsHTML() {
+  const h = state.holdings, sys = here(), isDocked = docked();
+  const hops = hopCounts(galaxy, state.location);
+  const w = h.warehouses[sys.id];
+  const whList = Object.entries(h.warehouses).map(([id, wh]) => {
+    const n = Number(id);
+    const contents = Object.entries(wh.goods).map(([g, q]) => `${q} ${good(g).name}`).join(', ') || 'empty';
+    return `<li>${esc(galaxy.systems[n].name)}${n === state.location ? ', here' : `, ${plural(hops[n], 'jump')} away`}: ${storedUnits(wh)} of ${WAREHOUSE_CAP}, ${contents}.</li>`;
+  }).join('');
+  let whHere = '';
+  if (isDocked && w) {
+    const store = GOODS.filter(g => state.cargo[g.id]).map(g => `<button data-action="h-store" data-arg="${g.id}" data-key="h-store-${g.id}">Store ${state.cargo[g.id].qty} ${g.name}</button>`).join(' ');
+    const take = Object.entries(w.goods).map(([g, q]) => `<button data-action="h-take" data-arg="${g}" data-key="h-take-${g}">Load ${q} ${good(g).name}</button>`).join(' ');
+    whHere = `<h3>Your warehouse here</h3><p>${store || 'Nothing in your hold to store.'}</p><p>${take || 'Nothing stored here.'}</p>`;
+  } else if (isDocked && Object.keys(h.warehouses).length < MAX_WAREHOUSES) {
+    whHere = `<p><button data-action="h-warehouse" data-key="h-warehouse">Buy a warehouse here, ${warehouseCost(sys)} credits</button></p>`;
+  }
+  const canTrade = isDocked && offices(sys).includes('guild');
+  const lines = Object.entries(LINES).map(([id, line]) => {
+    const L = h.lines[id], n = h.shares[id] || 0;
+    const ch = L.price - L.last;
+    const btns = canTrade ? `<button data-action="h-shares" data-arg="${id}:1" data-key="h-buy1-${id}" aria-label="Buy 1 share of ${line.name}">Buy 1</button>
+      <button data-action="h-shares" data-arg="${id}:10" data-key="h-buy10-${id}" aria-label="Buy 10 shares of ${line.name}">Buy 10</button>
+      ${n ? `<button data-action="h-shares" data-arg="${id}:-1" data-key="h-sell1-${id}" aria-label="Sell 1 share of ${line.name}">Sell 1</button>
+      <button data-action="h-shares" data-arg="${id}:-9999" data-key="h-sellall-${id}" aria-label="Sell all shares of ${line.name}">Sell all</button>` : ''}` : '';
+    return `<li><p>${line.name}, ${line.desc}: ${L.price} a share, ${ch >= 0 ? 'up' : 'down'} ${Math.abs(ch)} last period, dividend about ${Math.round(line.div * 100 * 10) / 10}% every 10 days. You own ${n}${n ? `, worth ${n * L.price}` : ''}.</p>${btns}</li>`;
+  }).join('');
+  let stn = '';
+  if (h.station) {
+    const st = h.station;
+    const ups = Object.entries(STATION_UPGRADES).map(([k, u]) => {
+      const lvl = st.upgrades[k];
+      const btn = st.sys === state.location && lvl < u.max ? `<button data-action="h-upgrade" data-arg="${k}" data-key="h-upgrade-${k}">Build, ${u.cost(lvl)} credits</button>` : '';
+      return `<li><p>${u.name}, level ${lvl} of ${u.max}: ${u.desc}.</p>${btn}</li>`;
+    }).join('');
+    stn = `<p>${esc(st.name)} at ${esc(galaxy.systems[st.sys].name)}${st.sys === state.location ? ', here' : `, ${plural(hops[st.sys], 'jump')} away`}. Earns about ${900 + 500 * st.upgrades.market} credits every 10 days, half when its region is troubled by war, blockades or pirate surges. Pirate raids can take a period's income.</p><ul class="cards">${ups}</ul>`;
+  } else {
+    stn = `<p>You don't own a station. One costs ${STATION_COST} credits at any independent port.</p>${isDocked && sys.authority === 'Independent' ? `<button data-action="h-station" data-key="h-station">Buy a station here, ${STATION_COST} credits</button>` : ''}`;
+  }
+  return `<section id="sec-holdings" aria-labelledby="h-holdings"><h2 id="h-holdings" tabindex="-1">Holdings</h2>
+    <p>Shares and station are worth about ${netWorth()} credits. Payments arrive every 10 days and are announced when you next arrive somewhere.</p>
+    <h3>Warehouses</h3>${whList ? `<ul>${whList}</ul>` : '<p>You have none.</p>'}<p>Warehouses at low and no security ports can be robbed.</p>${whHere}
+    <h3>Guild shipping lines</h3><ul class="cards">${lines}</ul>${canTrade ? '' : '<p>Shares are bought and sold at Merchant Guild offices.</p>'}
+    <h3>Station</h3>${stn}</section>`;
+}
+
+// ---------- cantina ----------
+const BETS = [50, 100, 250, 500];
+function startGame(kind, arg) {
+  const s = sysState(state, state.location);
+  if (kind === 'starjack' && s.bannedUntil && state.day < s.bannedUntil) { announce('The card dealers here won’t play with you after you were caught cheating.'); return; }
+  const bet = kind === 'pit' ? PIT_TIERS[Number(arg)].fee : Number(arg);
+  if (state.credits < bet) { announce('You can’t cover that.'); return; }
+  state.credits -= bet;
+  ui.game = kind === 'starjack' ? startStarjack(bet) : kind === 'dice' ? startDice(bet) : startPit(Number(arg));
+  if (ui.game.over) settleGame();
+  render();
+  announce(ui.game.lines.join(' '));
+}
+function settleGame() {
+  const g = ui.game;
+  if (g.settled) return;
+  g.settled = true;
+  const extra = [];
+  if (g.game === 'pit') {
+    if (g.result === 'win') { state.credits += PIT_TIERS[g.tier].purse; morale(2, extra); }
+  } else if (g.result === 'win') state.credits += g.bet * 2;
+  else if (g.result === 'starjack') state.credits += Math.round(g.bet * 2.5);
+  else if (g.result === 'push') state.credits += g.bet;
+  g.lines.push(...extra, `Credits ${state.credits}.`);
+  save();
+}
+function gameAction(a) {
+  const g = ui.game;
+  if (!g || g.over) return;
+  const out = [];
+  if (a === 'hit') starjackHit(g);
+  if (a === 'stand') starjackStand(g);
+  if (a === 'cheat') {
+    const ok = Math.random() < Math.max(0.1, Math.min(0.9, 0.35 + sk('deception') * 0.06));
+    gainXP('deception', ok ? 4 : 2, out);
+    if (ok) { starjackHit(g, bestCard(g)); g.lines.unshift('You palm a card from your sleeve.'); }
+    else {
+      g.over = true; g.result = 'lose'; g.settled = true;
+      const fine = Math.min(state.credits, 100);
+      state.credits -= fine;
+      sysState(state, state.location).bannedUntil = state.day + 10;
+      g.lines = [`The dealer catches you cheating. You lose your bet, pay a ${fine} credit fine, and are banned from the tables here for 10 days.`];
+      changeLocal(state, galaxy, state.location, -8, g.lines);
+    }
+  }
+  if (a === 'roll') diceRoll(g);
+  if (a === 'stop') diceStop(g);
+  if (['strike', 'guard', 'feint'].includes(a)) { pitRound(g, a, sk('dueling')); gainXP('dueling', 2, out); }
+  g.lines.push(...out);
+  if (g.over) settleGame();
+  render();
+  announce(g.lines.join(' '));
+}
+
+function cantinaHTML() {
+  const sys = here();
+  const g = ui.game;
+  const pitOk = sys.authority !== 'Concord';
+  if (g) {
+    const name = { starjack: 'Starjack', dice: 'Void Dice', pit: 'Pit fight' }[g.game];
+    let btns = '';
+    if (!g.over) {
+      if (g.game === 'starjack') btns = `<button data-action="g-hit" data-key="g-hit">Hit</button> <button data-action="g-stand" data-key="g-stand">Stand</button> <button data-action="g-cheat" data-key="g-cheat">Palm a card (deception ${sk('deception')})</button>`;
+      if (g.game === 'dice') btns = `<button data-action="g-roll" data-key="g-roll">Roll</button> ${g.total ? `<button data-action="g-stop" data-key="g-stop">Stop at ${g.total}</button>` : ''}`;
+      if (g.game === 'pit') btns = ['strike', 'guard', 'feint'].map(m => `<button data-action="g-${m}" data-key="g-${m}">${m.charAt(0).toUpperCase() + m.slice(1)}</button>`).join(' ');
+    } else {
+      const again = g.game === 'pit' ? `data-arg="pit:${g.tier}"` : `data-arg="${g.game}:${g.bet}"`;
+      btns = `<button data-action="g-start" ${again} data-key="g-again">Play again</button>`;
+    }
+    const state2 = g.game === 'starjack' ? `<p>Your hand: ${g.you.join(', ')}, total ${handTotal(g.you)}. Dealer shows ${g.dealer[0]}.</p>` : g.game === 'dice' ? `<p>Your total: ${g.total}. Bet ${g.bet}.</p>` : `<p>You ${g.you}, them ${g.them}.</p>`;
+    return `<section id="sec-cantina" aria-labelledby="h-cantina"><h2 id="h-cantina" tabindex="-1">${name}</h2>
+      <ul>${g.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>${g.over ? '' : state2}
+      <p>${btns}</p><button data-action="g-leave" data-key="g-leave">Leave the table</button></section>`;
+  }
+  const bets = kind => BETS.filter(b => b <= state.credits).map(b => `<button data-action="g-start" data-arg="${kind}:${b}" data-key="g-${kind}-${b}" aria-label="Play ${kind === 'starjack' ? 'Starjack' : 'Void Dice'} for ${b}">${b}</button>`).join(' ');
+  const pits = PIT_TIERS.map((t, i) => `<li><p>Fight ${t.name}: entry ${t.fee}, purse ${t.purse}.</p>${state.credits >= t.fee ? `<button data-action="g-start" data-arg="pit:${i}" data-key="g-pit-${i}" aria-label="Fight ${t.name}">Fight</button>` : ''}</li>`).join('');
+  return `<section id="sec-cantina" aria-labelledby="h-cantina"><h2 id="h-cantina" tabindex="-1">Cantina</h2>
+    <p>Credits ${state.credits}.</p>
+    <h3>Starjack</h3><p>Get closer to 21 than the dealer without going over. The dealer stands on 17. Starjack, 21 with your first two cards, pays 3 to 2. You can try to palm a card, using deception.</p>
+    <p>${bets('starjack') || 'You can’t afford a bet.'}</p>
+    <h3>Void Dice</h3><p>Roll as often as you like, adding up your rolls. A 1 busts you. When you stop, the house rolls and must beat your total without busting.</p>
+    <p>${bets('dice') || 'You can’t afford a bet.'}</p>
+    <h3>Pit fights</h3>${pitOk ? `<p>Three blows wins. Strike beats feint, guard beats strike, feint beats guard. Ties go to the better fighter, using dueling.</p><ul class="cards">${pits}</ul>` : '<p>The Concord bans pit fights. Try an independent or pirate port.</p>'}</section>`;
 }
 
 // ---------- rendering ----------
@@ -2017,7 +2243,7 @@ function marketHTML() {
 function servicesHTML() {
   const sys = here();
   const sh = state.ship;
-  const price = fuelPrice(sys);
+  const price = myFuelPrice(sys);
   const need = sh.tank - state.fuel;
   const hullNeed = sh.hullMax - sh.hull;
   const sysNeed = SYSTEMS.reduce((n, x) => n + (3 - sh.sys[x]), 0);
@@ -2386,7 +2612,7 @@ function mutinyHTML() {
     <button data-action="mutiny" data-arg="yield" data-key="mutiny-yield">Give up command</button>`;
 }
 
-const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['rivals', 'Rivals'], ['news', 'News'], ['records', 'Records']];
+const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['holdings', 'Holdings'], ['cantina', 'Cantina'], ['rivals', 'Rivals'], ['news', 'News'], ['records', 'Records']];
 
 function gameHTML() {
   if (state.mutiny) return mutinyHTML();
@@ -2405,6 +2631,8 @@ function gameHTML() {
     case 'captain': view = captainHTML(); break;
     case 'news': view = newsHTML(); break;
     case 'rivals': view = rivalsHTML(); break;
+    case 'holdings': view = holdingsHTML(); break;
+    case 'cantina': view = isDocked ? cantinaHTML() : refusedHTML(); break;
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
@@ -2425,7 +2653,7 @@ function render() {
   const key = active && active.dataset ? active.dataset.key : null;
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
-  if (ui.screen === 'game') { advanceWorld(); tickRivals(); save(); }
+  if (ui.screen === 'game') { advanceWorld(); tickRivals(); tickHoldings(); save(); }
   app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : ui.screen === 'help' ? helpHTML() : gameHTML();
   let target = null;
   if (ui.focus === 'view-first') { target = app.querySelector('#view h2'); ui.focus = null; }
@@ -2464,7 +2692,7 @@ app.addEventListener('click', e => {
     case 'repairsys': repairSystems(); break;
     case 'hirecrew': crewAction('hire'); break;
     case 'crew': crewAction(arg); break;
-    case 'view': ui.view = arg; ui.confirmBuyShip = null; ui.confirmSlot = null; ui.focus = 'view-first'; render(); break;
+    case 'view': if (ui.game && ui.game.over) ui.game = null; ui.view = arg; ui.confirmBuyShip = null; ui.confirmSlot = null; ui.focus = 'view-first'; render(); break;
     case 'buyweapon': buyWeapon(arg); break;
     case 'sellweapon': sellWeapon(Number(arg)); break;
     case 'upgrade': installUpgrade(arg); break;
@@ -2472,6 +2700,22 @@ app.addEventListener('click', e => {
     case 'buyship': buyShip(arg); break;
     case 'mutiny': resolveMutiny(arg); break;
     case 'insure': buyInsurance(arg); break;
+    case 'h-warehouse': holdingsAct(o => buyWarehouse(o)); break;
+    case 'h-store': holdingsAct(o => storeGoods(arg, o)); break;
+    case 'h-take': holdingsAct(o => retrieveGoods(arg, o)); break;
+    case 'h-shares': { const [id, n] = arg.split(':'); holdingsAct(o => trade_shares(id, Number(n), o)); break; }
+    case 'h-station': holdingsAct(o => buyStation(o)); break;
+    case 'h-upgrade': holdingsAct(o => upgradeStation(arg, o)); break;
+    case 'g-start': { const [k, v] = arg.split(':'); ui.game = null; startGame(k, v); break; }
+    case 'g-leave': { const g = ui.game; if (g && !g.over) { if (g.game === 'pit') announce('You walk out of the pit and forfeit the fight.'); else { announce(`You leave the table and forfeit your ${g.bet} credit bet.`); } } ui.game = null; ui.focus = 'view-first'; render(); break; }
+    case 'g-hit': gameAction('hit'); break;
+    case 'g-stand': gameAction('stand'); break;
+    case 'g-cheat': gameAction('cheat'); break;
+    case 'g-roll': gameAction('roll'); break;
+    case 'g-stop': gameAction('stop'); break;
+    case 'g-strike': gameAction('strike'); break;
+    case 'g-guard': gameAction('guard'); break;
+    case 'g-feint': gameAction('feint'); break;
     case 'hireofficer': { const o = []; if (hireOfficer(sysState(state, state.location), Number(arg), o)) log(o[0]); save(); render(); announce(o.join(' ')); break; }
     case 'dismiss': {
       const id = Number(arg);
