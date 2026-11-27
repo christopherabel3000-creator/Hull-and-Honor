@@ -220,7 +220,7 @@ Several arcs can be active in one campaign, and they can clash.
 8. Jump events and derelict salvage. **(Built)**
 9. Galaxy events (famines, plagues, booms, blockades) and faction wars. **(Built)**
 10. Rival captains. **(Built)**
-11. Officers with personalities, and mission twists.
+11. Officers with personalities, and mission twists. **(Built)**
 12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights).
 
 ## Stage 8 details (as built)
@@ -251,6 +251,21 @@ Several arcs can be active in one campaign, and they can clash.
 - **Allies:** a fighting rival who is your ally and within 3 jumps has a 35% chance to jump into your fights, firing every turn.
 - **Replacements:** when a rival dies or is taken prisoner, a newcomer of the same kind appears 10 to 25 days later, so there are always six. If you killed the old rival, there's a 40% chance the newcomer is their kin: same family name, a grudge (hostile from the start), and close to the old rival's strength.
 - The **Rivals** view lists every rival: style, strength, ship, which faction they side with, their attitude, where you last saw them, and their recent history with you.
+
+## Stage 11 details (as built)
+
+- **Officers:** six roles, one officer each: first mate (leadership), pilot (piloting), gunner (gunnery), engineer (repairs), navigator (navigation), quartermaster (trading). An officer's skill (1 to 5) adds to your own level in that skill; an unhappy officer (morale under 25) adds half.
+- **Hiring:** each port has 0 to 3 officers looking for a berth (refreshed every 6 days), with a wage (6 + 5 per skill level, more if greedy) and a signing bonus (350 per level). Concord ports lean toward lawful officers, pirate ports toward outlaws. Officer wages are paid with crew wages on every jump.
+- **Traits** (one or two): lawful, outlaw, merciful, bloodthirsty, brave, cautious, greedy, loyal, ambitious. Opposites never pair.
+- **Reactions:** officers' morale moves with what you do: piracy, smuggling, Concord work, destroying surrendered ships, mercy, victories, running away, losing your ship, surrendering, unpaid wages and big profits. The officer who feels most strongly speaks up. Loyal officers take bad news half as hard. Officers below 20 morale quit at the next port.
+- **Raises:** ambitious or greedy officers ask for a raise about every 25 days (a jump event): give it, talk them out of it (negotiation), or refuse.
+- **Personal favors:** after 25 days aboard, an officer may ask one favor: take them home, help them settle a score with a pirate (a fight), or bring a gift to their family. Doing it raises their skill by 1 and makes them devoted; abandoning it hurts their morale badly.
+- **Mission twists:** about 30% of freight, dispatch, smuggling, escort and war supply contracts have a hidden twist:
+  - Contraband: partway there, the freight turns out to be illegal weapons. Deliver it anyway for 50% more (now customs can catch it), dump it, or report the client.
+  - Rerouted: the destination moves 1 to 3 jumps further, with 40% more pay and extra days.
+  - Rush: the client offers 50% more if you arrive by an earlier day.
+  - Double-cross: at delivery, the client offers half pay. Take it, lean on them (negotiation), or keep the freight.
+  - Ambush: someone is waiting at the destination: pirates, or a bounty hunter for smuggling jobs.
 
 ## Build plan (proposed)
 

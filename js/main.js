@@ -17,9 +17,10 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
+import { initOfficers, ensureOfficers, officerBonus, officerWages, moraleName, officerBoard, hireOfficer, dismissOfficer, officerReact, officerDepartures, maybePersonalFavor, personalDone, personalAbandoned, ROLES, TRAITS, MAX_OFFICERS } from './officers.js';
 import { retireRival, initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
 import { initWorld, news as pushNews, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
-import { rivalMeetEvent, initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
+import { twistEvent, rivalMeetEvent, initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
@@ -45,6 +46,7 @@ function ensureShip(st) {
   if (!st.caches) st.caches = [];
   ensureWorld(st);
   ensureRivals(st);
+  ensureOfficers(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -54,13 +56,16 @@ function newStarterShip(crew = 6) {
 
 const app = document.getElementById('app');
 const isStory = m => m.type === 'story';
-const isStoryFight = m => isStory(m) && !!m.enemy;
-const contractCount = () => state.missions.filter(m => !isStory(m)).length;
+const isPersonal = m => m.type === 'personal';
+const isSpecial = m => isStory(m) || isPersonal(m);
+const isStoryFight = m => isSpecial(m) && !!m.enemy;
+const contractCount = () => state.missions.filter(m => !isSpecial(m)).length;
 const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
 initWorld({ state: () => state, galaxy: () => galaxy });
+initOfficers({ state: () => state, galaxy: () => galaxy });
 initRivals({ state: () => state, galaxy: () => galaxy, news: t => pushNews(t) });
 initEvents({
   state: () => state, here: () => here(), sk: id => sk(id), gainXP: (id, n, o) => gainXP(id, n, o),
@@ -80,6 +85,11 @@ initEvents({
     return n;
   },
   freeSpace: () => freeSpace(),
+  missionById: id => state.missions.find(m => m.id === id) || null,
+  sysName: id => galaxy.systems[id].name,
+  dropMission: (m, o, reason, penalty) => failMission(m, o, reason, penalty),
+  completeWithPay: (m, mult, o) => { m.pay = Math.round(m.pay * mult / 10) * 10; completeMission(m, o); },
+  localRep: (d, o) => changeLocal(state, galaxy, state.location, d, o),
   tip: o => {
     const list = eventList().filter(x => x.sys !== state.location);
     if (!list.length) { o.push('They have no news worth sharing.'); return; }
@@ -116,7 +126,7 @@ initEvents({
   },
 });
 initStory({ state: () => state, galaxy: () => galaxy, receive: (n, msgs) => receive(n, msgs), charge: (n, msgs) => charge(n, msgs), log: m => log(m) });
-const ui = { confirmSlot: null, view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
+const ui = { confirmDismiss: null, confirmSlot: null, view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
 
 // ---------- helpers ----------
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -211,6 +221,10 @@ function completeMission(m, msgs) {
       else { m.pay = Math.round(m.pay * 1.2 / 10) * 10; msgs.push(`You beat ${r.name} there, and the client pays a bonus.`); adjust(r, -3, 'You beat them to a delivery.', msgs); }
     }
   }
+  if (m.rushBy != null) {
+    if (state.day <= m.rushBy) { m.pay = Math.round(m.pay * 1.5 / 10) * 10; msgs.push('You made the rush deadline: a 50% bonus.'); }
+    else msgs.push('You missed the rush deadline, so no bonus.');
+  }
   msgs.push(`Contract complete: ${missionTitle(m, galaxy)}. Paid ${m.pay} credits.`);
   receive(m.pay, msgs);
   if (m.type === 'smuggle') {
@@ -267,7 +281,7 @@ function checkDeadlines(msgs) {
 function autoDeliver(msgs) {
   for (const m of [...state.missions]) {
     if (m.dest !== state.location) continue;
-    if (isStory(m)) { if (!m.enemy && !m.deliverOnly) storyDone(m, msgs); continue; }
+    if (isSpecial(m)) { if (!m.enemy && !m.deliverOnly) specialDone(m, msgs); continue; }
     if (m.type !== 'procure' && !COMBAT_TYPES.includes(m.type)) completeMission(m, msgs);
   }
 }
@@ -322,6 +336,7 @@ function newGame(captain, ship, seedText, ironman) {
   ensureWorld(state);
   ensureRep(state, galaxy);
   ensureRivals(state);
+  ensureOfficers(state);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
   save();
@@ -403,6 +418,7 @@ function sell(goodId, all) {
   const profit = Math.round(earned - costBasis);
   const tmsgs = [];
   if (profit > 0) gainXP('trading', Math.ceil(profit / 150), tmsgs);
+  if (profit > 500) officerReact('profit', tmsgs);
   recordNotes(state, sys);
   log(`Sold ${sold} ${g.name} for ${earned} credits at ${sys.name} (${profit >= 0 ? 'profit' : 'loss'} ${Math.abs(profit)}).`);
   save();
@@ -498,7 +514,7 @@ function jump(to) {
   msgs.unshift(`Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`);
   log(`Jumped from ${from.name} to ${sys.name}.`);
   if (mutinyCheck()) { startMutiny(msgs); return; }
-  const enc = missionEncounter(sys) || blockadeEncounter(sys, msgs) || rivalEncounter(sys) || randomEncounter(sys);
+  const enc = missionEncounter(sys) || twistEncounter(sys, msgs) || blockadeEncounter(sys, msgs) || rivalEncounter(sys) || randomEncounter(sys);
   if (enc && enc.event) { beginEvent(enc.event, msgs); return; }
   if (enc && enc.message) msgs.push(enc.message);
   else if (enc) { startCombat(enc, true, msgs); return; }
@@ -524,6 +540,8 @@ function finishArrival(msgs) {
       autoDeliver(msgs);
       recordNotes(state, sys);
       crewArrivalChecks(msgs);
+      officerDepartures(msgs);
+      maybePersonalFavor(msgs);
       if (state.perks.clanLord && sys.clan === state.perks.clanLord && sys.authority.endsWith(' clan') && state.day - (state.perks.lastTribute || 0) >= 10) {
         state.perks.lastTribute = state.day;
         receive(800, msgs);
@@ -565,6 +583,14 @@ function acceptMission(id) {
   if (missionSpace(m) > freeSpace()) { announce(`Not enough hold space. This contract needs ${missionSpace(m)}, you have ${freeSpace()} free.`); return; }
   sysState(state, state.location).board.missions = board.filter(x => x !== m);
   state.missions.push(m);
+  const TWISTS = {
+    freight: { contraband: 3, doublecross: 2, rerouted: 2, rush: 2 },
+    dispatch: { ambush: 3, rush: 3, rerouted: 1, doublecross: 1 },
+    smuggle: { doublecross: 3, ambush: 2, rerouted: 1 },
+    escort: { ambush: 4, rerouted: 1 },
+    warsupply: { ambush: 3, rush: 2 },
+  }[m.type];
+  if (TWISTS && rand() < 0.3) m.twist = pickW(TWISTS);
   let raceMsg = '';
   if (['freight', 'dispatch', 'smuggle', 'warsupply'].includes(m.type)) {
     const present = rivalAt(state.location);
@@ -593,7 +619,7 @@ function deliverProcurement(id) {
   c.qty -= m.units;
   if (c.qty <= 0) delete state.cargo[m.goodId];
   const msgs = [];
-  if (isStory(m)) storyDone(m, msgs);
+  if (isSpecial(m)) specialDone(m, msgs);
   else completeMission(m, msgs);
   save();
   render();
@@ -606,12 +632,13 @@ function abandonMission(id) {
   if (ui.confirmAbandon !== id) {
     ui.confirmAbandon = id;
     render();
-    announce(isStory(m) ? 'Abandoning this objective ends the story for good. Press Confirm abandon to continue.' : `Abandoning costs standing with the ${factionName(m.faction)}. Press Confirm abandon to continue.`);
+    announce(isPersonal(m) ? 'Abandoning this favor will hurt your officer badly. Press Confirm abandon to continue.' : isStory(m) ? 'Abandoning this objective ends the story for good. Press Confirm abandon to continue.' : `Abandoning costs standing with the ${factionName(m.faction)}. Press Confirm abandon to continue.`);
     return;
   }
   ui.confirmAbandon = null;
   const msgs = [];
-  if (isStory(m)) failArc(m.arc, msgs, 'You abandoned it.');
+  if (isPersonal(m)) personalAbandoned(m, msgs);
+  else if (isStory(m)) failArc(m.arc, msgs, 'You abandoned it.');
   else failMission(m, msgs, 'abandoned');
   save();
   render();
@@ -639,7 +666,7 @@ const TRAINERS = {
   clan: ['dueling', 'deception', 'gunnery', 'piloting', 'leadership'],
 };
 const xpNeeded = level => 10 + level * 10;
-const sk = id => (state.skills && state.skills[id] ? state.skills[id].level : 0);
+const sk = id => (state.skills && state.skills[id] ? state.skills[id].level : 0) + officerBonus(id);
 function ensureSkills(st) {
   if (!st.skills) st.skills = {};
   for (const id of Object.keys(SKILLS)) if (!st.skills[id]) st.skills[id] = { level: 1, xp: 0 };
@@ -707,6 +734,10 @@ function trainSkill(id) {
   save(); render();
   announce(msgs.join(' '));
 }
+function specialDone(m, msgs) {
+  if (isPersonal(m)) personalDone(m, msgs);
+  else storyDone(m, msgs);
+}
 function storyDone(m, msgs) {
   storyMissionDone(m, msgs);
   gainPoint(1, msgs, 'a story chapter');
@@ -721,7 +752,8 @@ function captainHTML() {
     let btns = '';
     if (state.skillPoints > 0 && s.level < SKILL_MAX) btns += `<button data-action="spendpoint" data-arg="${id}" data-key="spend-${id}" aria-label="Spend a point on ${def.name}">Spend a point</button>`;
     if (trainers.includes(id) && s.level < TRAIN_MAX) btns += `<button data-action="train" data-arg="${id}" data-key="train-${id}" aria-label="Train ${def.name}, ${trainCost(s.level)} credits and 2 days">Train, ${trainCost(s.level)} credits and 2 days</button>`;
-    const eff = def.effect(s.level);
+    const bonus = officerBonus(id);
+    const eff = def.effect(s.level + bonus) + (bonus ? `, including ${bonus} from your officers` : '');
     return `<li><p>${def.name} ${s.level}, ${prog}. ${eff.charAt(0).toUpperCase() + eff.slice(1)}.</p>${btns}</li>`;
   }).join('');
   const where = trainers.length
@@ -752,6 +784,7 @@ function morale(delta, msgs) {
 
 // How the crew feels about what you do, depending on how they lean.
 function conduct(kind, msgs) {
+  officerReact(kind, msgs);
   const c = state.crew;
   const lawful = c.lean >= 20, outlaw = c.lean <= -20;
   if (kind === 'piracy') { morale(lawful ? -5 : outlaw ? 2 : -1, msgs); c.lean = clampN(c.lean - 4, -100, 100); }
@@ -765,7 +798,7 @@ function combatSkill() {
 }
 
 function payWages(days, msgs) {
-  const due = days * state.ship.crew * WAGE;
+  const due = days * (state.ship.crew * WAGE + officerWages());
   if (!due) return;
   if (state.credits >= due) {
     state.credits -= due;
@@ -775,6 +808,7 @@ function payWages(days, msgs) {
     state.credits = 0;
     msgs.push(`You could not pay your crew in full. You owe them ${state.crew.owed} credits.`);
     morale(-8, msgs);
+    officerReact('unpaid', msgs);
   }
 }
 
@@ -1011,7 +1045,7 @@ function missionEncounter(sys) {
 }
 
 function missionCombat(m) {
-  if (isStory(m)) {
+  if (isSpecial(m)) {
     const cargo = m.enemy === 'convoy' ? randomCargo(true, 10, 18) : randomCargo(false, 3, 10);
     const enemy = makeEnemy(m.enemy, m.enemyFaction, cargo);
     enemy.name = m.enemyName;
@@ -1036,6 +1070,43 @@ function missionCombat(m) {
     return { enemy, range: 2, missionId: m.id, intro: `You find ${m.target}'s ship. They turn to fight.` };
   }
   return { enemy, range: 2, missionId: m.id, intro: `A ${sys.clan} ${enemy.name} moves to attack.` };
+}
+
+// Contract twists: some happen on the way, some at the destination.
+function twistEncounter(sys, msgs) {
+  const order = [...state.missions].sort((a, b) => (b.dest === sys.id) - (a.dest === sys.id));
+  for (const m of order) {
+    if (!m.twist || m.twistDone) continue;
+    const away = m.dest !== sys.id && sys.id !== m.origin;
+    const atDest = m.dest === sys.id;
+    if (m.twist === 'contraband' && away) { m.twistDone = true; return { event: twistEvent('twist-contraband', m) }; }
+    if (m.twist === 'rerouted' && away) {
+      m.twistDone = true;
+      const hops = hopCounts(galaxy, m.dest);
+      const pool = galaxy.systems.filter(x => hops[x.id] >= 1 && hops[x.id] <= 3 && x.id !== sys.id && (m.type !== 'dispatch' || x.authority === 'Concord'));
+      if (!pool.length) continue;
+      const nd = pool[Math.floor(rand() * pool.length)];
+      const extra = hops[nd.id];
+      msgs.push(`New orders: the client has moved the delivery from ${galaxy.systems[m.dest].name} to ${nd.name}. Pay rises 40%, and you get ${extra * 4} more days.`);
+      m.dest = nd.id; m.pay = Math.round(m.pay * 1.4 / 10) * 10; m.deadline += extra * 4;
+      continue;
+    }
+    if (m.twist === 'rush' && away) {
+      m.twistDone = true;
+      const left = Math.max(1, m.deadline - state.day);
+      m.rushBy = state.day + Math.max(2, Math.floor(left * 0.6));
+      msgs.push(`The client sends word: deliver ${missionTitle(m, galaxy).toLowerCase()} by day ${m.rushBy} and they'll pay 50% more.`);
+      continue;
+    }
+    if (m.twist === 'doublecross' && atDest && docked()) { m.twistDone = true; return { event: twistEvent('twist-doublecross', m) }; }
+    if (m.twist === 'ambush' && atDest) {
+      m.twistDone = true;
+      const kind = m.type === 'smuggle' ? 'hunter' : m.tier >= 2 ? 'marauder' : 'raider';
+      const enemy = makeEnemy(kind, kind === 'hunter' ? 'concord' : clanKey(sys.clan), randomCargo(false, 1, 5));
+      return { enemy, range: 1, intro: `Someone sold you out. A ${enemy.name} is waiting for your delivery at ${sys.name}.` };
+    }
+  }
+  return null;
 }
 
 function rivalEncounter(sys) {
@@ -1238,8 +1309,8 @@ function defeatEffects(how, msgs) {
       completeMission(m, msgs);
     } else if (m.type === 'raid' || m.type === 'warstrike') {
       completeMission(m, msgs);
-    } else if (isStory(m)) {
-      storyDone(m, msgs);
+    } else if (isSpecial(m)) {
+      specialDone(m, msgs);
     }
   }
 }
@@ -1299,6 +1370,9 @@ function endFight(outcome, lines) {
     failEscort(msgs);
   }
   rivalOutcome(outcome, msgs);
+  if (['enemy-destroyed', 'captured', 'enemy-surrendered'].includes(outcome)) officerReact('victory', msgs);
+  if (outcome === 'player-escaped') officerReact('fled', msgs);
+  if (outcome === 'player-destroyed') officerReact('lost', msgs);
   cb.phase = 'result';
   cb.resultText = [...lines, ...msgs];
   save();
@@ -1340,7 +1414,7 @@ function surrenderChoice(choice) {
   const msgs = [];
   if (choice === 'loot') { lootEnemy(msgs); msgs.push('You let their ship go.'); defeatEffects('looted', msgs); }
   if (choice === 'prisoner') { lootEnemy(msgs); defeatEffects('prisoner', msgs); }
-  if (choice === 'release') { msgs.push('You let them go.'); defeatEffects('released', msgs); }
+  if (choice === 'release') { msgs.push('You let them go.'); defeatEffects('released', msgs); officerReact('mercy', msgs); }
   if (choice === 'destroy') {
     msgs.push('You destroy the surrendered ship. Word of this will spread.');
     changeRep(state, cb.enemy.faction, -6, msgs);
@@ -1823,6 +1897,10 @@ function systemsText(c) {
 }
 
 function missionDetails(m, hops) {
+  if (isPersonal(m)) {
+    const where = m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away`;
+    return `Personal favor: ${m.title} (${where}).`;
+  }
   if (isStory(m)) {
     const where = m.dest === -1 ? 'anywhere' : m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away`;
     return `Story, ${ARCS[m.arc].title}: ${m.title} (${where}).`;
@@ -1833,6 +1911,7 @@ function missionDetails(m, hops) {
   const where = m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away, ${dest.authority}`;
   const space = missionSpace(m) ? `, takes ${missionSpace(m)} hold space` : '';
   const risk = (m.type === 'smuggle' && dest.authority === 'Concord' ? ', customs risk at destination' : '')
+    + (m.hotCargo ? ', secretly contraband' : '') + (m.rushBy != null ? `, rush bonus if delivered by day ${m.rushBy}` : '')
     + (m.race && rivalById(m.race.rivalId) ? `, racing ${rivalById(m.race.rivalId).name}, who should arrive around day ${m.race.eta}` : '');
   return `${missionTitle(m, galaxy)} (${where}). For the ${factionName(m.faction)}. Pays ${m.pay}, ${due}${space}${risk}.`;
 }
@@ -1871,7 +1950,7 @@ function contractsHTML() {
       const label = isStory(m) ? 'Search for your target' : m.type === 'patrol' ? 'Hunt pirates here' : m.type === 'bounty' ? `Search for ${esc(m.target)}` : 'Search for the convoy';
       btns.push(`<button data-action="hunt" data-arg="${m.id}" data-key="hunt-${m.id}">${label}</button>`);
     }
-    if (isStory(m) && m.deliverOnly && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
+    if (isSpecial(m) && m.deliverOnly && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
     if (m.type === 'procure' && m.dest === state.location && isDocked) btns.push(`<button data-action="deliver" data-arg="${m.id}" data-key="deliver-${m.id}">Deliver ${m.units} ${good(m.goodId).name}</button>`);
     const confirm = ui.confirmAbandon === m.id;
     btns.push(`<button data-action="abandon" data-arg="${m.id}" data-key="abandon-${m.id}">${confirm ? 'Confirm abandon' : 'Abandon'}</button>`);
@@ -2233,12 +2312,24 @@ function crewHTML() {
       btns += `<button data-action="crew" data-arg="leave" data-key="crew-leave">Shore leave, ${sh.crew * 15} credits and 1 day</button>`;
     }
   }
-  return `<section id="sec-crew" aria-labelledby="h-crew"><h2 id="h-crew" tabindex="-1">Crew</h2><ul>
+  const officers = state.officers.map(o => `<li><p>${esc(o.name)}, ${ROLES[o.role].name}, skill ${o.level} (adds ${o.morale >= 25 ? o.level : Math.floor(o.level / 2)} to your ${SKILLS[ROLES[o.role].skill].name.toLowerCase()}). ${o.traits.map(t => TRAITS[t]).join('; ')}. Morale: ${moraleName(o.morale)}. Wage ${o.wage} a day.</p>
+    <button data-action="dismiss" data-arg="${o.id}" data-key="dismiss-${o.id}" aria-label="${ui.confirmDismiss === o.id ? `Confirm dismissing ${esc(o.name)}` : `Dismiss ${esc(o.name)}`}">${ui.confirmDismiss === o.id ? 'Confirm dismiss' : 'Dismiss'}</button></li>`).join('');
+  let hire = '';
+  if (isDocked) {
+    const list = officerBoard(sysState(state, state.location), here());
+    hire = list.map(c => `<li><p>${esc(c.name)}, ${ROLES[c.role].name}, skill ${c.level}. ${c.traits.map(t => TRAITS[t]).join('; ')}. Wage ${c.wage} a day, signing bonus ${c.signing}.</p>
+      <button data-action="hireofficer" data-arg="${c.id}" data-key="hireofficer-${c.id}" aria-label="Hire ${esc(c.name)}">Hire</button></li>`).join('');
+    hire = `<h3>Officers looking for a berth</h3>${hire ? `<ul class="cards">${hire}</ul>` : '<p>Nobody here right now.</p>'}`;
+  }
+  const officerSec = `<section id="sec-officers" aria-labelledby="h-officers"><h2 id="h-officers" tabindex="-1">Officers</h2>
+    <p>One officer per role, up to ${MAX_OFFICERS}. Officers add their skill to yours, and react to how you run the ship. An unhappy officer adds half as much, and one who's had enough quits at the next port.</p>
+    ${officers ? `<ul class="cards">${officers}</ul>` : '<p>You have no officers.</p>'}${hire}</section>`;
+  return `${officerSec}<section id="sec-crew" aria-labelledby="h-crew"><h2 id="h-crew" tabindex="-1">Crew</h2><ul>
     <li>Crew: ${sh.crew} of ${sh.crewMax}</li>
     <li>Loyalty: ${loyaltyName(c.loyalty)}, ${Math.round(c.loyalty)}</li>
     <li>Leaning: ${leanName(c.lean)}, ${c.lean}</li>
     <li>Experience: ${skillName(c.skill)}</li>
-    <li>Wages: ${sh.crew * WAGE} credits per day${c.owed ? `, ${c.owed} owed` : ''}</li></ul>
+    <li>Wages: ${sh.crew * WAGE + officerWages()} credits per day, including officers${c.owed ? `, ${c.owed} owed` : ''}</li></ul>
     <p>Crew hired at Concord ports lean lawful and dislike piracy. Crew hired at pirate ports lean outlaw and dislike Concord work. Below 30 loyalty, crew desert in port; below 15, they may mutiny.</p>
     ${btns}</section>`;
 }
@@ -2381,6 +2472,13 @@ app.addEventListener('click', e => {
     case 'buyship': buyShip(arg); break;
     case 'mutiny': resolveMutiny(arg); break;
     case 'insure': buyInsurance(arg); break;
+    case 'hireofficer': { const o = []; if (hireOfficer(sysState(state, state.location), Number(arg), o)) log(o[0]); save(); render(); announce(o.join(' ')); break; }
+    case 'dismiss': {
+      const id = Number(arg);
+      if (ui.confirmDismiss !== id) { ui.confirmDismiss = id; render(); announce('Press Confirm dismiss to let this officer go.'); break; }
+      ui.confirmDismiss = null;
+      const o = []; dismissOfficer(id, o); save(); render(); announce(o.join(' ')); break;
+    }
     case 'story-accept': storyAct(msgs => acceptArc(arg, msgs)); break;
     case 'story-decline': storyAct(msgs => declineArc(arg, msgs)); break;
     case 'story-choose': { const [id, opt] = arg.split(':'); storyAct(msgs => chooseOption(id, opt, msgs)); break; }

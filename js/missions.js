@@ -36,7 +36,7 @@ export function missionEnemy(m) {
   if (m.type === 'raid') return ['hauler', 'hauler', 'convoy', 'convoy'][m.tier];
   return null;
 }
-export const isContraband = m => m.type === 'smuggle';
+export const isContraband = m => m.type === 'smuggle' || !!m.hotCargo;
 
 function routeDays(galaxy, path, tank) {
   let d = 0;
@@ -134,6 +134,7 @@ export function missionTitle(m, galaxy) {
     case 'dispatch': return `Carry sealed Concord dispatches to ${dest}`;
     case 'smuggle': return `Smuggle ${m.units} crates of contraband to ${dest}`;
     case 'story': return m.title;
+    case 'personal': return m.title;
     case 'warsupply': return `Run ${m.units} crates of war supplies to the front at ${dest}`;
     case 'warstrike': return `Strike ${factionName(m.enemy)} forces at ${dest}`;
     case 'escort': return `Escort a Guild convoy to ${dest}`;

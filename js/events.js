@@ -3,6 +3,7 @@ import { GOODS } from './galaxy.js';
 import { getRep, changeRep, clanKey } from './reputation.js';
 import { makeEnemy } from './combat.js';
 import { rivalById, adjust, rivalEnemy, styleLabel, isCombat, attitudeName } from './rivals.js';
+import { raiseCandidate, ROLES } from './officers.js';
 
 let api = null;
 export function initEvents(a) { api = a; }
@@ -302,6 +303,77 @@ EVENTS.rival = {
     ];
   },
 };
+
+EVENTS.raise = {
+  title: 'A word with an officer',
+  weight: () => (raiseCandidate() ? 2.5 : 0),
+  setup: () => ({ officerId: raiseCandidate().id }),
+  text: ctx => {
+    const o = ctx.st.officers.find(x => x.id === ctx.data.officerId);
+    return o ? `Your ${ROLES[o.role].name}, ${o.name}, asks for a raise of 5 credits a day.` : 'Never mind.';
+  },
+  choices: ctx => {
+    const o = ctx.st.officers.find(x => x.id === ctx.data.officerId);
+    if (!o) return [{ id: 'ok', label: 'Continue', run: () => null }];
+    o.lastAsk = ctx.st.day;
+    return [
+      { id: 'yes', label: `Give the raise, to ${o.wage + 5} a day`, run: (c, out) => { o.wage += 5; o.morale = Math.min(100, o.morale + 15); out.push(`${o.name} thanks you.`); return null; } },
+      { id: 'talk', label: `Talk them out of it (${odds('negotiation', 0.4)})`, run: (c, out) => {
+        if (roll('negotiation', 0.4, out)) { o.morale = Math.min(100, o.morale + 3); out.push(`${o.name} agrees to wait.`); return null; }
+        o.morale = Math.max(0, o.morale - 10); out.push(`${o.name} leaves the conversation unhappy.`); return null;
+      } },
+      { id: 'no', label: 'Refuse', run: (c, out) => { o.morale = Math.max(0, o.morale - 15); out.push(`${o.name} takes it badly.`); return null; } },
+    ];
+  },
+};
+
+EVENTS['twist-contraband'] = {
+  title: 'Something wrong with the cargo',
+  weight: () => 0,
+  text: ctx => {
+    const m = api.missionById(ctx.data.missionId);
+    return m ? `A crate in the Guild freight bound for ${api.sysName(m.dest)} splits open. It's full of illegal weapons. The client lied to you.` : 'The cargo is gone.';
+  },
+  choices: ctx => {
+    const m = api.missionById(ctx.data.missionId);
+    if (!m) return [{ id: 'ok', label: 'Continue', run: () => null }];
+    return [
+      { id: 'carry', label: 'Deliver it anyway, and charge them 50% more', run: (c, out) => { m.hotCargo = true; m.pay = Math.round(m.pay * 1.5 / 10) * 10; out.push('You reseal the crates. Customs will treat them as contraband now.'); api.conduct('smuggle', out); return null; } },
+      { id: 'dump', label: 'Dump it into space', run: (c, out) => { api.dropMission(m, out, 'cargo dumped', 2); return null; } },
+      { id: 'report', label: 'Report the client to the Concord', run: (c, out) => { api.dropMission(m, out, 'reported to the Concord', 3); changeRep(c.st, 'concord', 4, out); api.receive(150, out); out.push('The Concord pays a 150 credit reward.'); return null; } },
+    ];
+  },
+};
+
+EVENTS['twist-doublecross'] = {
+  title: 'Double-cross',
+  weight: () => 0,
+  text: ctx => {
+    const m = api.missionById(ctx.data.missionId);
+    return m ? `The client takes delivery, then offers you only half the ${m.pay} credits you agreed on.` : 'The client is gone.';
+  },
+  choices: ctx => {
+    const m = api.missionById(ctx.data.missionId);
+    if (!m) return [{ id: 'ok', label: 'Continue', run: () => null }];
+    const list = [
+      { id: 'accept', label: `Take the ${Math.round(m.pay / 2)} credits`, run: (c, out) => { api.completeWithPay(m, 0.5, out); return null; } },
+      { id: 'threaten', label: `Lean on them for the full amount (${odds('negotiation', 0.4)})`, run: (c, out) => {
+        if (roll('negotiation', 0.4, out)) { out.push('They pay in full.'); api.completeWithPay(m, 1, out); return null; }
+        out.push('They call port security. You leave with half.'); api.localRep(-5, out); api.completeWithPay(m, 0.5, out); return null;
+      } },
+    ];
+    if (m.type === 'freight') list.push({ id: 'keep', label: 'Keep the cargo and sell it yourself', run: (c, out) => {
+      const g = pick(GOODS.filter(x => !x.illegal && x.base >= 60));
+      api.dropMission(m, out, 'you kept the cargo', 8);
+      const n = api.addCargo(g.id, m.units);
+      out.push(`The crates hold ${n} ${g.name.toLowerCase()}. They're yours now.`);
+      return null;
+    } });
+    return list;
+  },
+};
+
+export function twistEvent(id, m) { return { id, data: { missionId: m.id }, result: null }; }
 
 export function rivalMeetEvent(r) { return { id: 'rival', data: { rivalId: r.id }, result: null }; }
 
