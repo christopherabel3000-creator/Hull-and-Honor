@@ -1,0 +1,20 @@
+# Uploads appstore/screenshots/ to the App Store version through the App Store Connect API
+# (tools/appstore_screenshots.py). Run it from the Actions tab, or ask Claude.
+name: App Store screenshots
+
+on:
+  workflow_dispatch:
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload the screenshots
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          pip install --quiet pyjwt cryptography requests pillow
+          python3 tools/appstore_screenshots.py
