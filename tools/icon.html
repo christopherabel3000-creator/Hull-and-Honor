@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Hull and Honor's app icon and launch image. tools/icon.py saves them as PNG files. -->
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0;background:#0b0f1a}
+svg{display:block}
+</style></head><body>
+<script>
+const splash = location.search.includes('splash');
+const N = splash ? 2732 : 1024;
+// Stars, a gold shield, and a starship climbing across it, drawn on a 1024 square.
+let stars = '';
+let seed = 7;
+const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+for (let i = 0; i < 70; i++) stars += `<circle cx="${(rnd() * 1024).toFixed(0)}" cy="${(rnd() * 1024).toFixed(0)}" r="${(1.5 + rnd() * 3.5).toFixed(1)}" fill="#ffffff" opacity="${(0.35 + rnd() * 0.6).toFixed(2)}"/>`;
+const art = `
+  <defs>
+    <radialGradient id="space" cx="45%" cy="40%" r="75%">
+      <stop offset="0" stop-color="#1c2f5e"/><stop offset="1" stop-color="#060912"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe08a"/><stop offset="1" stop-color="#c98a1b"/>
+    </linearGradient>
+    <linearGradient id="hull" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4f7ff"/><stop offset="1" stop-color="#9fb0d4"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff6a2a" stop-opacity="0"/><stop offset="1" stop-color="#ffd166"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#space)"/>
+  ${stars}
+  <path d="M512 150 L800 250 L780 560 C760 720 640 820 512 880 C384 820 264 720 244 560 L224 250 Z"
+        fill="none" stroke="url(#gold)" stroke-width="34" stroke-linejoin="round"/>
+  <path d="M512 210 L745 290 L728 555 C712 690 612 775 512 825 C412 775 312 690 296 555 L279 290 Z" fill="#0d1a38" opacity="0.75"/>
+  <g transform="translate(512 540) rotate(-38)">
+    <path d="M-330 -18 L-150 -14 L-150 14 L-330 18 Z" fill="url(#flame)"/>
+    <path d="M-170 -40 L170 -26 Q250 -16 300 0 Q250 16 170 26 L-170 40 Z" fill="url(#hull)"/>
+    <path d="M-110 -40 L10 -150 L70 -150 L20 -32 Z" fill="#c7d2ec"/>
+    <path d="M-110 40 L10 150 L70 150 L20 32 Z" fill="#c7d2ec"/>
+    <path d="M140 -14 Q205 -10 235 0 Q205 10 140 14 Z" fill="#3aa0ff"/>
+    <rect x="-170" y="-40" width="26" height="80" fill="#5d6b8f"/>
+  </g>`;
+const scale = splash ? 0.42 : 1, off = (N - 1024 * scale) / 2;
+document.body.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${N}" height="${N}" viewBox="0 0 ${N} ${N}">
+  <rect width="${N}" height="${N}" fill="#0b0f1a"/>
+  ${splash ? `<g transform="translate(${off} ${off}) scale(${scale})"><clipPath id="r"><rect width="1024" height="1024" rx="226"/></clipPath><g clip-path="url(#r)">${art}</g></g>` : art}
+</svg>`;
+</script>
+</body></html>

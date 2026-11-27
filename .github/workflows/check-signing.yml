@@ -1,0 +1,58 @@
+# Checks the App Store signing secrets without building anything: it signs in to the App Store
+# Connect API with them and reports whether Apple accepts the key and whether the app record exists.
+# It also registers the app ID com.playbyear.hullandhonor with Apple if it isn't registered yet,
+# which App Store Connect needs before the app record can be created.
+# Run it from the Actions tab (Check signing secrets, Run workflow). The key itself is never printed.
+name: Check signing secrets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the secrets with Apple
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          pip install --quiet pyjwt cryptography requests
+          python3 - <<'PY'
+          import os, sys, time, jwt, requests
+          ok = True
+          def say(t): print(t); open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(t + "\n\n")
+          for v in ("APPLE_TEAM_ID", "ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8"):
+              if not os.environ.get(v): say(f"MISSING: the secret {v} is empty or not set."); ok = False
+          if not ok: sys.exit(1)
+          key = os.environ["ASC_KEY_P8"].strip()
+          say(f"Team ID is {len(os.environ['APPLE_TEAM_ID'].strip())} characters (should be 10).")
+          if key.startswith("-----BEGIN PRIVATE KEY-----") and key.endswith("-----END PRIVATE KEY-----"):
+              say(f"Key file text: starts and ends correctly, {len(key.splitlines())} lines.")
+          else:
+              say("Key file text: does NOT start with BEGIN PRIVATE KEY and end with END PRIVATE KEY. It may be cut off or have extra text."); sys.exit(1)
+          try:
+              token = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"].strip(), "iat": int(time.time()), "exp": int(time.time()) + 600, "aud": "appstoreconnect-v1"},
+                                 key, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"].strip(), "typ": "JWT"})
+          except Exception as e:
+              say(f"Key file text: could not be read as a private key ({type(e).__name__})."); sys.exit(1)
+          r = requests.get("https://api.appstoreconnect.apple.com/v1/apps", params={"filter[bundleId]": "com.playbyear.hullandhonor", "fields[apps]": "name,bundleId"},
+                           headers={"Authorization": "Bearer " + token}, timeout=30)
+          if r.status_code == 401:
+              say("Apple REJECTED the key (401). The key, Key ID or Issuer ID don't match."); sys.exit(1)
+          if r.status_code != 200:
+              say(f"Apple answered {r.status_code}: {r.text[:300]}"); sys.exit(1)
+          say("Apple ACCEPTED the key: the Key ID, Issuer ID and key file all match.")
+          H = {"Authorization": "Bearer " + token}
+          b = requests.get("https://api.appstoreconnect.apple.com/v1/bundleIds", params={"filter[identifier]": "com.playbyear.hullandhonor"}, headers=H, timeout=30)
+          found = [x for x in b.json().get("data", []) if x["attributes"]["identifier"] == "com.playbyear.hullandhonor"] if b.status_code == 200 else []
+          if found: say("App ID com.playbyear.hullandhonor: already registered.")
+          else:
+              c = requests.post("https://api.appstoreconnect.apple.com/v1/bundleIds", headers=H, timeout=30,
+                                json={"data": {"type": "bundleIds", "attributes": {"identifier": "com.playbyear.hullandhonor", "name": "Hull and Honor", "platform": "IOS"}}})
+              say("App ID com.playbyear.hullandhonor: " + ("registered now." if c.status_code == 201 else f"could not register ({c.status_code}): {c.text[:300]}"))
+          apps = r.json().get("data", [])
+          say("App record for com.playbyear.hullandhonor: " + ("found, named " + apps[0]["attributes"]["name"] if apps else "not created yet (needed before the first TestFlight upload)."))
+          PY

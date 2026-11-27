@@ -1,3 +1,4 @@
+import { backupSaves, restoreSaves } from './nativesave.js';
 import { generateGalaxy, GOODS, ECONOMIES, SECURITY_NAMES, jumpCost, shortestPath, hopCounts } from './galaxy.js';
 import { sysState, refreshMarket, prices, nudge, recordNotes, tradeTag, fuelPrice, hasBlackMarket } from './economy.js';
 import {
@@ -150,6 +151,7 @@ function log(msg) {
 }
 function save() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+  backupSaves();
 }
 function loadSave() {
   try {
@@ -1237,7 +1239,7 @@ function randomEncounter(sys) {
 }
 
 function startCombat(enc, pendingArrival, msgs = []) {
-  if (!state.ironman) { try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
+  if (!state.ironman) { try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } backupSaves(); }
   state.ship.shield = state.ship.shieldMax;
   applyCaptain();
   let ally = null;
@@ -1379,7 +1381,7 @@ function loseCargoMissions(msgs, reason) {
 
 function die(reason) {
   state.dead = { reason, day: state.day };
-  if (state.ironman) { try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ } }
+  if (state.ironman) { try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ } backupSaves(); }
   state.combat = null;
   log(reason);
   save();
@@ -1669,6 +1671,7 @@ function saveToSlot(i) {
   }
   ui.confirmSlot = null;
   try { localStorage.setItem(slotKey(i), JSON.stringify(state)); } catch (e) { announce('Could not save.'); return; }
+  backupSaves();
   render();
   announce(`Saved to slot ${i}.`);
 }
@@ -2103,7 +2106,8 @@ function titleHTML() {
         <p><input type="checkbox" id="f-ironman" name="ironman"> <label for="f-ironman">One life mode: no saved games or reloads. Death ends the campaign for good.</label></p>
         ${warn}
         <button type="submit" data-key="start">Start</button>
-      </form></section>`;
+      </form></section>
+    <p><a href="support.html">Help and support</a> · <a href="privacy.html">Privacy policy</a></p>`;
 }
 
 function holdContents() {
@@ -2688,7 +2692,8 @@ function gameHTML() {
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
       <button data-action="help" data-key="help-records">How to play</button>
-      <button data-action="title" data-key="title">Return to title screen</button></section>
+      <button data-action="title" data-key="title">Return to title screen</button>
+      <p><a href="support.html">Help and support</a> · <a href="privacy.html">Privacy policy</a></p></section>
       ${state.ironman ? '' : `<section id="sec-saves" aria-labelledby="h-saves"><h2 id="h-saves" tabindex="-1">Saved games</h2>${slotsHTML(false)}</section>`}`; break;
     default: view = `${isDocked ? '' : refusedHTML()}${statusHTML()}${travelHTML()}${courseHTML()}`;
   }
@@ -2844,4 +2849,4 @@ app.addEventListener('submit', e => {
   newGame(f.captain.value.trim(), f.ship.value.trim(), f.seed.value.trim(), f.ironman.checked);
 });
 
-render();
+restoreSaves(render);
