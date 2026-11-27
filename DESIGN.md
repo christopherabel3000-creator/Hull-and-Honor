@@ -218,7 +218,7 @@ Several arcs can be active in one campaign, and they can clash.
 ## Variety roadmap
 
 8. Jump events and derelict salvage. **(Built)**
-9. Galaxy events (famines, plagues, booms, blockades) and faction wars.
+9. Galaxy events (famines, plagues, booms, blockades) and faction wars. **(Built)**
 10. Rival captains.
 11. Officers with personalities, and mission twists.
 12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights).
@@ -230,6 +230,16 @@ Several arcs can be active in one campaign, and they can clash.
 - Event weights depend on security, your cargo, crew size and standing.
 - **Derelict salvage:** a push-your-luck run. Each section deeper has a higher chance of trouble (10% plus 8% per section, less with repairs skill): crew lost, hull damage, or something in the dark (dueling can save your crew member). Sections hold credits or valuable goods; the last section holds 800–2,000 credits or intact parts installed as a free upgrade. You keep the haul only by returning to your ship. Caches from black boxes are deeper derelicts.
 - Cache coordinates are listed in the Bridge status.
+
+## Stage 9 details (as built)
+
+- **Galaxy events** run for weeks and move prices at one system: famine (food x2.2, water x1.5), plague (medicine x2.6), mining boom (machinery, food, luxuries up; ore cheap), festival (luxuries, food, textiles up), glut (one good at 55%), blockade (all prices x1.35; blockade ships stop 70% of arrivals). Pirate surges cover a whole region: more and mostly pirate encounters. Up to 7 events at once; about a 13% chance of a new one each day; 4 at the start of a campaign.
+- **Blockades:** a pirate clan blockades Concord ports and the Concord blockades clan ports. Pirate blockaders let you through if their clan Likes you; otherwise they attack. Concord blockaders attack if you are Disliked or worse, and otherwise may search you for contraband.
+- **Wars:** the Concord against a clan, or clan against clan, at most two at once, declared every few weeks. A war has a score from -100 to 100 that drifts day by day and lasts 50 to 80 days or until one side reaches 100. The winner takes 1 to 3 of the loser's front systems, which change authority (and so docking, offices and ship dealers).
+- **Fronts** are each side's systems nearest the enemy. Front systems pay more for weapons (x1.8), metals, machinery, medicine and food. Arriving at a front, there's a 30% chance of meeting warships: whichever side likes you least attacks if you are Disliked or worse.
+- **War contracts** at navy posts and pirate contacts of warring factions: run war supplies to your side's front (cargo), or strike the enemy at their front (combat). Each completed war contract shifts the war 12 points toward your side, raises your side and lowers the enemy.
+- **News view:** current wars (who's winning, nearest fronts), galaxy events with distance and days left, and recent headlines. New headlines are announced on arrival (up to three). Jump lane buttons mention events and war fronts at each destination, and the system summary mentions what's happening here.
+- Border changes are saved and re-applied whenever the galaxy is loaded.
 
 ## Build plan (proposed)
 

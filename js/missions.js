@@ -1,5 +1,5 @@
 import { GOODS, ECONOMIES, jumpCost, shortestPath, hopCounts } from './galaxy.js';
-import { clanKey, getRep, accessTier } from './reputation.js';
+import { clanKey, getRep, accessTier, factionName } from './reputation.js';
 
 export const MAX_ACTIVE = 5;
 export const BOARD_REFRESH_DAYS = 4;
@@ -24,8 +24,8 @@ export function officeName(office, sys) {
 export const officeFaction = (office, sys) => (office === 'pirate' ? clanKey(sys.clan) : office);
 
 // Cargo space a contract takes up in your hold.
-export const missionSpace = m => (['freight', 'dispatch', 'smuggle'].includes(m.type) ? m.units : 0);
-export const COMBAT_TYPES = ['patrol', 'bounty', 'raid'];
+export const missionSpace = m => (['freight', 'dispatch', 'smuggle', 'warsupply'].includes(m.type) ? m.units : 0);
+export const COMBAT_TYPES = ['patrol', 'bounty', 'raid', 'warstrike'];
 
 const CAPTAIN_FIRST = ['Vex', 'Mara', 'Dask', 'Iolo', 'Reth', 'Sable', 'Kain', 'Orra', 'Tamsin', 'Bram', 'Juno', 'Corvin', 'Nyla', 'Hask'];
 const CAPTAIN_LAST = ['Varn', 'the Grey', 'Kesh', 'Halloway', 'Blackwater', 'Ashby', 'Morrow', 'Quill', 'Dray', 'the Knife', 'Stroud', 'Okonkwo'];
@@ -134,6 +134,8 @@ export function missionTitle(m, galaxy) {
     case 'dispatch': return `Carry sealed Concord dispatches to ${dest}`;
     case 'smuggle': return `Smuggle ${m.units} crates of contraband to ${dest}`;
     case 'story': return m.title;
+    case 'warsupply': return `Run ${m.units} crates of war supplies to the front at ${dest}`;
+    case 'warstrike': return `Strike ${factionName(m.enemy)} forces at ${dest}`;
     case 'escort': return `Escort a Guild convoy to ${dest}`;
     case 'patrol': return m.count <= 0 ? `Clear the pirates from ${dest}` : `Clear ${m.count === 1 ? '1 pirate ship' : `${m.count} pirate ships`} from ${dest}`;
     case 'bounty': return `Hunt the pirate captain ${m.target} at ${dest}`;

@@ -17,6 +17,7 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
+import { initWorld, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
 import { initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
@@ -41,6 +42,7 @@ function ensureShip(st) {
   ensureSkills(st);
   ensureStory(st);
   if (!st.caches) st.caches = [];
+  ensureWorld(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -56,6 +58,7 @@ const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
+initWorld({ state: () => state, galaxy: () => galaxy });
 initEvents({
   state: () => state, here: () => here(), sk: id => sk(id), gainXP: (id, n, o) => gainXP(id, n, o),
   receive: (n, o) => receive(n, o), charge: (n, o) => charge(n, o), morale: (d, o) => morale(d, o), conduct: (k, o) => conduct(k, o),
@@ -151,9 +154,42 @@ function getBoard(sys) {
     s.board = { day: state.day, missions: generateBoard(state, galaxy, sys) };
     if (state.perks.guildCharter) for (const m of s.board.missions) if (m.faction === 'guild') m.pay = Math.round(m.pay * 1.25 / 10) * 10;
     const neg = 1.25 * (1 + sk('negotiation') * 0.02);
+    s.board.missions.push(...warContracts(sys));
     for (const m of s.board.missions) m.pay = Math.round(m.pay * neg / 10) * 10;
   }
   return s.board.missions;
+}
+
+// War contracts for a faction's office at this port.
+function warContracts(sys) {
+  const out = [];
+  const hops = hopCounts(galaxy, sys.id);
+  const r10 = v => Math.max(10, Math.round(v / 10) * 10);
+  for (const office of offices(sys)) {
+    if (office === 'guild') continue;
+    const fk = officeFaction(office, sys);
+    for (const war of state.world.wars) {
+      if (war.a !== fk && war.b !== fk) continue;
+      const enemy = war.a === fk ? war.b : war.a;
+      const f = fronts(war);
+      const own = f[fk].filter(id => id !== sys.id && hops[id] < Infinity);
+      const theirs = f[enemy].filter(id => id !== sys.id && hops[id] < Infinity);
+      const base = { faction: fk, enemy, origin: sys.id, office, warId: war.id };
+      if (own.length) {
+        const tier = Math.floor(Math.random() * 3);
+        const dest = own[Math.floor(Math.random() * own.length)];
+        const units = 6 + tier * 3;
+        out.push({ ...base, id: state.nextMissionId++, type: 'warsupply', tier, dest, units, pay: r10((55 * hops[dest] + 18 * units) * (1 + 0.3 * tier)), deadline: state.day + hops[dest] * 5 + 6 });
+      }
+      if (theirs.length) {
+        const tier = Math.floor(Math.random() * 3);
+        const dest = theirs[Math.floor(Math.random() * theirs.length)];
+        const enemyKind = enemy === 'concord' ? (tier === 2 ? 'hunter' : 'patrol') : ['raider', 'marauder', 'marauder'][tier];
+        out.push({ ...base, id: state.nextMissionId++, type: 'warstrike', tier, dest, units: 0, enemyKind, pay: r10((280 + 60 * hops[dest]) * (1 + 0.35 * tier)), deadline: state.day + hops[dest] * 5 + 8 });
+      }
+    }
+  }
+  return out;
 }
 
 // ---------- contracts ----------
@@ -170,6 +206,13 @@ function completeMission(m, msgs) {
     changeRep(state, m.faction, 5 + m.tier, msgs);
     changeRep(state, 'guild', -3, msgs);
     addNotoriety(state, 2);
+  } else if (m.type === 'warsupply' || m.type === 'warstrike') {
+    changeRep(state, m.faction, 4 + m.tier, msgs);
+    changeRep(state, m.enemy, -4, msgs);
+    addNotoriety(state, 1);
+    conduct(m.faction === 'concord' ? 'lawful' : 'smuggle', msgs);
+    const war = warContribution(m.faction, m.enemy, 12);
+    if (war) msgs.push(`Your work helps the ${factionName(m.faction)}. In the war, ${warStatus(war)}.`);
   } else if (m.type === 'patrol' || m.type === 'bounty') {
     changeRep(state, 'concord', 4 + m.tier, msgs);
     changeLocal(state, galaxy, m.dest, 4, msgs);
@@ -260,6 +303,7 @@ function newGame(captain, ship, seedText, ironman) {
   };
   try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ }
   ensureSkills(state);
+  ensureWorld(state);
   ensureRep(state, galaxy);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
@@ -277,6 +321,7 @@ function continueGame() {
   galaxy = generateGalaxy(state.seed);
   ensureRep(state, galaxy);
   ensureShip(state);
+  applyControl(galaxy, state);
   refreshMarket(state, state.location);
   ui.screen = state.dead ? 'gameover' : 'game';
   ui.focus = state.dead ? 'over-heading' : state.mutiny ? 'mutiny-heading' : state.event ? 'event-heading' : state.salvage ? 'salvage-heading' : state.combat ? 'combat-heading' : 'sys-heading';
@@ -421,6 +466,7 @@ function jump(to) {
   gainXP('navigation', 1 + Math.floor(lane.ly / 5));
   state.fuel -= cost.fuel;
   state.day += cost.days;
+  advanceWorld();
   ui.confirmAbandon = null;
   const msgs = [];
   payWages(cost.days, msgs);
@@ -435,7 +481,7 @@ function jump(to) {
   msgs.unshift(`Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`);
   log(`Jumped from ${from.name} to ${sys.name}.`);
   if (mutinyCheck()) { startMutiny(msgs); return; }
-  const enc = missionEncounter(sys) || randomEncounter(sys);
+  const enc = missionEncounter(sys) || blockadeEncounter(sys, msgs) || randomEncounter(sys);
   if (enc && enc.message) msgs.push(enc.message);
   else if (enc) { startCombat(enc, true, msgs); return; }
   let ev = null;
@@ -472,6 +518,8 @@ function finishArrival(msgs) {
     msgs.push('Destination reached.');
   }
   checkTriggers(sys, msgs);
+  const fresh = freshNews();
+  if (fresh.length) msgs.push(`News: ${fresh.join(' ')}`);
   if (!msgs.length) msgs.push(`You are at ${sys.name}.`);
   save();
   ui.view = 'bridge';
@@ -940,6 +988,11 @@ function missionCombat(m) {
     return { enemy, range: m.approach ? 1 : 2, approach: m.approach, missionId: m.id, intro: m.approach ? `Your target is here: the ${enemy.name}.` : `The ${enemy.name} moves to engage you.` };
   }
   const sys = galaxy.systems[m.dest];
+  if (m.type === 'warstrike') {
+    const enemy = makeEnemy(m.enemyKind, m.enemy, randomCargo(false, 2, 6));
+    enemy.name = `${factionName(m.enemy)} ${enemy.name}`;
+    return { enemy, range: 2, missionId: m.id, intro: `A ${enemy.name} holds the line at ${sys.name}.` };
+  }
   const kind = missionEnemy(m);
   if (m.type === 'raid') {
     const enemy = makeEnemy(kind, 'guild', randomCargo(true, 8, 16));
@@ -954,7 +1007,37 @@ function missionCombat(m) {
   return { enemy, range: 2, missionId: m.id, intro: `A ${sys.clan} ${enemy.name} moves to attack.` };
 }
 
+function blockadeEncounter(sys, msgs) {
+  const bl = blockadeAt(sys.id);
+  if (!bl || rand() >= 0.7) return null;
+  if (bl.blockader === 'concord') {
+    if (getRep(state, 'concord') <= -10) {
+      return { enemy: makeEnemy('patrol', 'concord'), range: 1, intro: `Concord blockade ships close on you. They know who you are.` };
+    }
+    if (carryingContraband() && rand() < 0.5 * (1 - sk('deception') * 0.05)) {
+      msgs.push('Concord blockade ships stop and search you.');
+      seizeContraband(msgs);
+      return { message: 'They let you go on.' };
+    }
+    gainXP('deception', carryingContraband() ? 3 : 0, msgs);
+    return { message: 'Concord blockade ships hail you and let you through.' };
+  }
+  if (getRep(state, bl.blockader) >= 10 || state.perks.clanLord === sys.clan) return { message: `The ${factionName(bl.blockader)} blockade ships wave you through.` };
+  const enemy = makeEnemy(rand() < 0.5 ? 'raider' : 'marauder', bl.blockader, randomCargo(false, 0, 4));
+  return { enemy, range: 2, intro: `You run into the ${factionName(bl.blockader)} blockade. A ${enemy.name} moves to stop you.` };
+}
+
 function randomEncounter(sys) {
+  const war = frontWarAt(sys.id);
+  if (war && rand() < 0.3) {
+    const sides = [war.a, war.b].sort((x, y) => getRep(state, x) - getRep(state, y));
+    const foe = sides[0];
+    if (getRep(state, foe) <= -10) {
+      const enemy = makeEnemy(foe === 'concord' ? 'patrol' : (rand() < 0.5 ? 'raider' : 'marauder'), foe, randomCargo(false, 0, 4));
+      return { enemy, range: 2, intro: `You arrive on the war front. A ${factionName(foe)} warship marks you as an enemy and attacks.` };
+    }
+    return { message: `Warships of the ${factionName(war.a)} and the ${factionName(war.b)} trade fire nearby.` };
+  }
   if (state.arcs.wanted && state.arcs.wanted.status === 'active' && rand() < 0.15) {
     const enemy = makeEnemy('hunter', 'concord', randomCargo(false, 0, 3));
     return { enemy, range: 2, intro: 'A bounty hunter drops out of a jump right on top of you. Your face is on their screen.' };
@@ -962,9 +1045,12 @@ function randomEncounter(sys) {
   const escort = state.missions.some(m => m.type === 'escort');
   let chance = { high: 0.06, medium: 0.14, low: 0.24, none: 0.34 }[sys.security] * (1 - sk('navigation') * 0.03);
   if (escort) chance = Math.max(chance, 0.4);
+  const surge = surgeAt(sys);
+  if (surge) chance = Math.min(0.6, chance * 1.6);
   if (rand() >= chance) return null;
   let type = pickW({ high: { patrol: 5, merchant: 4, pirate: 1 }, medium: { pirate: 4.5, merchant: 3.5, patrol: 2 }, low: { pirate: 7, merchant: 3 }, none: { pirate: 8, merchant: 2 } }[sys.security]);
   if (escort && rand() < 0.75) type = 'pirate';
+  if (surge && rand() < 0.6) type = 'pirate';
   if (type === 'pirate') {
     const clan = clanKey(sys.clan);
     if (getRep(state, clan) >= 10 || state.perks.clanLord === sys.clan) return { message: `Raiders of the ${sys.clan} clan recognize your ship and let you pass.` };
@@ -1093,7 +1179,7 @@ function defeatEffects(how, msgs) {
     } else if (m.type === 'bounty') {
       if (how === 'prisoner') { m.pay = Math.round(m.pay * 1.5 / 10) * 10; msgs.push(`${m.target} is taken alive for a bigger reward.`); }
       completeMission(m, msgs);
-    } else if (m.type === 'raid') {
+    } else if (m.type === 'raid' || m.type === 'warstrike') {
       completeMission(m, msgs);
     } else if (isStory(m)) {
       storyDone(m, msgs);
@@ -1906,7 +1992,10 @@ function travelHTML() {
     const visited = state.systems[l.to]?.visited ? ', visited' : '';
     const onCourse = l.to === next ? ', on your course' : '';
     const contract = state.missions.some(m => m.dest === l.to) ? ', contract destination' : '';
-    return `<li><button data-action="jump" data-arg="${l.to}" data-key="jump-${l.to}">${esc(s.name)}: ${l.ly} light-years, ${c.fuel} fuel, ${plural(c.days, 'day')}. ${describeSystem(s)}${visited}${onCourse}${contract}</button></li>`;
+    const evs = eventsAt(l.to);
+    const front = frontWarAt(l.to) ? ['war front'] : [];
+    const tags = [...evs, ...front].length ? `, ${[...evs, ...front].join(', ')}` : '';
+    return `<li><button data-action="jump" data-arg="${l.to}" data-key="jump-${l.to}">${esc(s.name)}: ${l.ly} light-years, ${c.fuel} fuel, ${plural(c.days, 'day')}. ${describeSystem(s)}${visited}${onCourse}${contract}${tags}</button></li>`;
   }).join('');
   return `<section id="sec-travel" aria-labelledby="h-travel"><h2 id="h-travel" tabindex="-1">Travel</h2>
     ${nextBtn}<h3>Jump lanes from here</h3><ul>${lanes}</ul></section>`;
@@ -1970,6 +2059,33 @@ function priceNotesHTML() {
 function logHTML() {
   const items = state.log.slice(0, 15).map(e => `<li>Day ${e.day}: ${esc(e.msg)}</li>`).join('');
   return `<section id="sec-log" aria-labelledby="h-log"><h2 id="h-log" tabindex="-1">Captain's log</h2><ul>${items}</ul></section>`;
+}
+
+function localSituation(sys) {
+  const parts = eventsAt(sys.id);
+  if (frontWarAt(sys.id)) parts.push('on a war front');
+  return parts.length ? ` Here: ${parts.join(', ')}.` : '';
+}
+
+function newsHTML() {
+  const hops = hopCounts(galaxy, state.location);
+  const away = id => (id === state.location ? 'here' : `${plural(hops[id], 'jump')} away`);
+  const wars = state.world.wars.map(w => {
+    const f = fronts(w);
+    const fr = [...f[w.a], ...f[w.b]].sort((x, y) => hops[x] - hops[y]).slice(0, 4).map(id => `${esc(galaxy.systems[id].name)} (${away(id)})`).join(', ');
+    return `<li>The ${factionName(w.a)} against the ${factionName(w.b)}: ${warStatus(w)}. ${plural(Math.max(0, w.end - state.day), 'day')} at most left. Nearest fronts: ${fr}.</li>`;
+  }).join('');
+  const evs = eventList().map(x => ({ ...x, d: x.sys != null ? hops[x.sys] : 0 })).sort((a, b) => a.d - b.d).map(x => {
+    const where = x.sys != null ? `${esc(x.place)}, ${away(x.sys)}` : `the ${esc(x.place)}`;
+    return `<li>${x.name} at ${where}: ${x.effect}. ${plural(Math.max(0, x.ev.end - state.day), 'day')} left.</li>`;
+  }).join('');
+  const recent = state.world.news.slice(0, 10).map(n => `<li>Day ${n.day}: ${esc(n.text)}</li>`).join('');
+  return `<section id="sec-wars" aria-labelledby="h-wars"><h2 id="h-wars" tabindex="-1">Wars</h2>
+    ${wars ? `<ul>${wars}</ul><p>Navy posts and pirate contacts of warring factions offer war contracts. Front-line systems pay more for weapons, metals, machinery, medicine and food.</p>` : '<p>The galaxy is at peace, for now.</p>'}</section>
+    <section id="sec-events" aria-labelledby="h-events"><h2 id="h-events" tabindex="-1">Galaxy events</h2>
+    ${evs ? `<ul>${evs}</ul>` : '<p>Nothing unusual is happening.</p>'}</section>
+    <section id="sec-headlines" aria-labelledby="h-headlines"><h2 id="h-headlines" tabindex="-1">Recent news</h2>
+    ${recent ? `<ul>${recent}</ul>` : '<p>No news yet.</p>'}</section>`;
 }
 
 function insuranceHTML() {
@@ -2075,7 +2191,7 @@ function mutinyHTML() {
     <button data-action="mutiny" data-arg="yield" data-key="mutiny-yield">Give up command</button>`;
 }
 
-const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['records', 'Records']];
+const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['news', 'News'], ['records', 'Records']];
 
 function gameHTML() {
   if (state.mutiny) return mutinyHTML();
@@ -2092,6 +2208,7 @@ function gameHTML() {
     case 'shipyard': view = isDocked ? `${servicesHTML()}${insuranceHTML()}${outfittingHTML()}${dealerHTML()}` : refusedHTML(); break;
     case 'crew': view = crewHTML(); break;
     case 'captain': view = captainHTML(); break;
+    case 'news': view = newsHTML(); break;
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
@@ -2101,7 +2218,7 @@ function gameHTML() {
     default: view = `${isDocked ? '' : refusedHTML()}${statusHTML()}${travelHTML()}${courseHTML()}`;
   }
   return `<h1 id="sys-heading" tabindex="-1">${esc(sys.name)}</h1>
-    <p>${describeSystem(sys)}. ${isDocked ? 'Docked' : 'In orbit, docking refused'}.</p>
+    <p>${describeSystem(sys)}. ${isDocked ? 'Docked' : 'In orbit, docking refused'}.${localSituation(sys)}</p>
     <p>Day ${state.day}. Credits ${state.credits}. Fuel ${state.fuel} of ${state.ship.tank}. Hold ${holdUsed()} of ${state.ship.cargo}. Hull ${state.ship.hull} of ${state.ship.hullMax}.</p>
     <nav aria-label="Ship"><ul class="nav">${nav}</ul></nav>
     <div id="view">${view}</div>`;
@@ -2112,7 +2229,7 @@ function render() {
   const key = active && active.dataset ? active.dataset.key : null;
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
-  if (ui.screen === 'game') save();
+  if (ui.screen === 'game') { advanceWorld(); save(); }
   app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : ui.screen === 'help' ? helpHTML() : gameHTML();
   let target = null;
   if (ui.focus === 'view-first') { target = app.querySelector('#view h2'); ui.focus = null; }

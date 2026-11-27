@@ -1,4 +1,5 @@
 import { GOODS, ECONOMIES } from './galaxy.js';
+import { priceMult } from './world.js';
 
 const PRODUCE = 0.75, DEMAND = 1.3, SPREAD = 0.88;
 
@@ -53,7 +54,7 @@ export function prices(state, sys, g) {
   const local = s.local * 0.0005;
   // The captain's trading skill: 1% better prices per level.
   const trade = ((state.skills && state.skills.trading && state.skills.trading.level) || 0) * 0.01;
-  const raw = g.base * m * sys.priceFactor[g.id] * (1 + (s.noise[g.id] ?? 0)) * (1 + (s.pressure[g.id] ?? 0));
+  const raw = g.base * m * priceMult(state, sys, g.id) * sys.priceFactor[g.id] * (1 + (s.noise[g.id] ?? 0)) * (1 + (s.pressure[g.id] ?? 0));
   const buy = Math.max(1, Math.round(raw * (1 - local - trade)));
   // Never let the sell price at a port reach its own buy price.
   const sell = Math.min(Math.round(raw * SPREAD * (1 + local + trade)), Math.floor(buy * 0.94));
