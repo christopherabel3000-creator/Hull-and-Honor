@@ -19,6 +19,7 @@ import {
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
 import { initHoldings, ensureHoldings, tickHoldings, takePending, netWorth, storedUnits, WAREHOUSE_CAP, MAX_WAREHOUSES, warehouseCost, LINES, STATION_COST, STATION_UPGRADES } from './holdings.js';
 import { startStarjack, starjackHit, starjackStand, bestCard, handTotal, startDice, diceRoll, diceStop, PIT_TIERS, startPit, pitRound } from './games.js';
+import { WEAPON_GEAR, ARMOR_GEAR, ARMORY_COST, ARMORY_MAX, ensureGear, weaponBonus, armorBonus, boardingGearMult, armorSaveChance, soldHere } from './gear.js';
 import { initOfficers, ensureOfficers, officerBonus, officerWages, moraleName, officerBoard, hireOfficer, dismissOfficer, officerReact, officerDepartures, maybePersonalFavor, personalDone, personalAbandoned, ROLES, TRAITS, MAX_OFFICERS } from './officers.js';
 import { retireRival, initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
 import { initWorld, news as pushNews, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
@@ -50,6 +51,7 @@ function ensureShip(st) {
   ensureRivals(st);
   ensureOfficers(st);
   ensureHoldings(st);
+  ensureGear(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -89,6 +91,7 @@ initEvents({
     return n;
   },
   freeSpace: () => freeSpace(),
+  weaponBonus: () => weaponBonus(state),
   missionById: id => state.missions.find(m => m.id === id) || null,
   sysName: id => galaxy.systems[id].name,
   dropMission: (m, o, reason, penalty) => failMission(m, o, reason, penalty),
@@ -342,6 +345,7 @@ function newGame(captain, ship, seedText, ironman) {
   ensureRivals(state);
   ensureOfficers(state);
   ensureHoldings(state);
+  ensureGear(state);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
   save();
@@ -704,7 +708,7 @@ function applyCaptain() {
   sh.gunBonus = sk('gunnery') * 0.01;
   sh.repairSkill = sk('repairs');
   sh.negBonus = sk('negotiation') * 0.03;
-  sh.skill = combatSkill() * (1 + sk('dueling') * 0.04);
+  sh.skill = combatSkill() * (1 + sk('dueling') * 0.04) * boardingGearMult(state);
 }
 function navCost(ly) {
   const n = sk('navigation');
@@ -746,6 +750,48 @@ function specialDone(m, msgs) {
   if (isPersonal(m)) personalDone(m, msgs);
   else storyDone(m, msgs);
 }
+function buyGear(slot, id) {
+  const list = slot === 'weapon' ? WEAPON_GEAR : ARMOR_GEAR;
+  const item = list[id];
+  if (!docked() || !soldHere(item, portKind(here()), here().security)) { announce('That isn’t sold here.'); return; }
+  const cur = state.gear[slot];
+  if (cur === id) { announce('You already have it.'); return; }
+  const refund = cur ? Math.round(list[cur].price * 0.5) : 0;
+  if (state.credits + refund < item.price) { announce(`That costs ${item.price}${refund ? `, less ${refund} for your old one` : ''}.`); return; }
+  state.credits += refund - item.price;
+  state.gear[slot] = id;
+  log(`Bought a ${item.name.toLowerCase()}.`);
+  save(); render();
+  announce(`${slot === 'weapon' ? `You now carry a ${item.name.toLowerCase()}` : `You now wear ${item.name === 'Padded vest' || item.name === 'Flak jacket' ? `a ${item.name.toLowerCase()}` : item.name.toLowerCase()}`}.${refund ? ` Your old one sold for ${refund}.` : ''} Credits ${state.credits}.`);
+}
+function buyArmory() {
+  const lvl = state.gear.armory;
+  if (lvl >= ARMORY_MAX) { announce('Your armory is fully stocked.'); return; }
+  const cost = ARMORY_COST[lvl];
+  if (state.credits < cost) { announce(`That costs ${cost}.`); return; }
+  state.credits -= cost;
+  state.gear.armory++;
+  save(); render();
+  announce(`Crew armory upgraded to level ${state.gear.armory}. Your boarding parties are better armed.`);
+}
+function gearHTML() {
+  const g = state.gear, sys = here(), kind = portKind(sys);
+  const w = g.weapon ? WEAPON_GEAR[g.weapon] : null, a = g.armor ? ARMOR_GEAR[g.armor] : null;
+  const shop = (list, slot) => Object.entries(list).filter(([, it]) => soldHere(it, kind, sys.security)).map(([id, it]) => {
+    const owned = g[slot] === id;
+    return `<li><p>${it.name}, ${slot === 'weapon' ? 'attack' : 'protection'} ${it.bonus}, ${it.price} credits${owned ? ', yours' : ''}.</p>${owned ? '' : `<button data-action="buygear" data-arg="${slot}:${id}" data-key="buygear-${id}" aria-label="Buy ${it.name}">Buy</button>`}</li>`;
+  }).join('');
+  const shopping = docked() ? `<h3>Weapons for sale</h3><ul class="cards">${shop(WEAPON_GEAR, 'weapon') || '<li>None here.</li>'}</ul>
+    <h3>Armor for sale</h3><ul class="cards">${shop(ARMOR_GEAR, 'armor') || '<li>None here.</li>'}</ul>
+    ${g.armory < ARMORY_MAX ? `<button data-action="buyarmory" data-key="buyarmory">Stock the crew armory to level ${g.armory + 1}, ${ARMORY_COST[g.armory]} credits</button>` : ''}` : '';
+  return `<section id="sec-gear" aria-labelledby="h-gear"><h2 id="h-gear" tabindex="-1">Personal gear</h2>
+    <ul><li>Weapon: ${w ? `${w.name}, attack ${w.bonus}` : 'none'}</li>
+    <li>Armor: ${a ? `${a.name}, protection ${a.bonus}` : 'none'}</li>
+    <li>Crew armory: level ${g.armory} of ${ARMORY_MAX}</li></ul>
+    <p>Your weapon adds to your dueling in pit fights, and with your armor it makes boarding fights and mutinies go better. In the pit, armor can turn aside a blow. If you lose a boarding fight, armor gives you 10% per point of protection to escape with your life${armorBonus(state) ? `, ${armorBonus(state) * 10}% with yours` : ''}. The crew armory makes your whole boarding party fight 10% better per level. Buying replaces what you carry, and the old item sells for half.</p>
+    ${shopping}</section>`;
+}
+
 function storyDone(m, msgs) {
   storyMissionDone(m, msgs);
   gainPoint(1, msgs, 'a story chapter');
@@ -869,7 +915,7 @@ function resolveMutiny(choice) {
     state.crew.loyalty = 50;
     msgs.push(`You pay the crew ${cost} credits and they stand down.`);
   } else if (choice === 'fight') {
-    const att = { crew: loyal + 1, skill: (combatSkill() + 0.3) * (1 + sk('dueling') * 0.04) };
+    const att = { crew: loyal + 1, skill: (combatSkill() + 0.3) * (1 + sk('dueling') * 0.04) * (1 + 0.05 * weaponBonus(state) + 0.04 * armorBonus(state)) };
     const def = { crew: rebels, skill: state.crew.skill };
     if (!boardingFight(att, def, Math.random)) {
       state.mutiny = null;
@@ -1348,6 +1394,11 @@ function endFight(outcome, lines) {
   const e = cb.enemy;
   const msgs = [];
   cb.outcome = outcome;
+  if (outcome === 'player-killed' && rand() < armorSaveChance(state)) {
+    outcome = 'player-destroyed';
+    cb.outcome = outcome;
+    msgs.push(`Your ${ARMOR_GEAR[state.gear.armor].name.toLowerCase()} turns a killing blow. Badly hurt, you reach an escape pod as your ship is lost.`);
+  }
   if (outcome === 'player-killed') {
     die(`Captain ${state.captain} was killed in a boarding fight on day ${state.day}.`);
     return;
@@ -1986,7 +2037,7 @@ function gameAction(a) {
   }
   if (a === 'roll') diceRoll(g);
   if (a === 'stop') diceStop(g);
-  if (['strike', 'guard', 'feint'].includes(a)) { pitRound(g, a, sk('dueling')); gainXP('dueling', 2, out); }
+  if (['strike', 'guard', 'feint'].includes(a)) { pitRound(g, a, sk('dueling') + weaponBonus(state), armorBonus(state)); gainXP('dueling', 2, out); }
   g.lines.push(...out);
   if (g.over) settleGame();
   render();
@@ -2604,7 +2655,7 @@ function dealerHTML() {
 function mutinyHTML() {
   const { loyal, rebels } = mutinyNumbers();
   const cost = state.ship.crew * 150;
-  const odds = oddsText(boardingOdds({ crew: loyal + 1, skill: combatSkill() + 0.3 }, { crew: rebels, skill: state.crew.skill }, false));
+  const odds = oddsText(boardingOdds({ crew: loyal + 1, skill: (combatSkill() + 0.3) * (1 + sk('dueling') * 0.04) * (1 + 0.05 * weaponBonus(state) + 0.04 * armorBonus(state)) }, { crew: rebels, skill: state.crew.skill }, false));
   return `<h1 id="mutiny-heading" tabindex="-1">Mutiny</h1>
     <p>${rebels} of your crew have taken up arms. About ${loyal - 1} stand with you.</p>
     ${state.credits >= cost ? `<button data-action="mutiny" data-arg="pay" data-key="mutiny-pay">Pay them off, ${cost} credits</button>` : `<p>Paying them off would cost ${cost} credits, more than you have.</p>`}
@@ -2628,7 +2679,7 @@ function gameHTML() {
     case 'market': view = isDocked ? `${marketHTML()}${priceNotesHTML()}` : `${refusedHTML()}${priceNotesHTML()}`; break;
     case 'shipyard': view = isDocked ? `${servicesHTML()}${insuranceHTML()}${outfittingHTML()}${dealerHTML()}` : refusedHTML(); break;
     case 'crew': view = crewHTML(); break;
-    case 'captain': view = captainHTML(); break;
+    case 'captain': view = `${captainHTML()}${gearHTML()}`; break;
     case 'news': view = newsHTML(); break;
     case 'rivals': view = rivalsHTML(); break;
     case 'holdings': view = holdingsHTML(); break;
@@ -2748,6 +2799,8 @@ app.addEventListener('click', e => {
     case 'help': ui.helpFrom = ui.screen; ui.screen = 'help'; ui.focus = 'help-heading'; render(); break;
     case 'helpback': ui.screen = ui.helpFrom || 'title'; ui.focus = ui.screen === 'title' ? 'title-heading' : 'view-first'; render(); break;
     case 'spendpoint': spendPoint(arg); break;
+    case 'buygear': { const [sl, id] = arg.split(':'); buyGear(sl, id); break; }
+    case 'buyarmory': buyArmory(); break;
     case 'train': trainSkill(arg); break;
     case 'c-board': combatAction('board'); break;
     case 'c-surrender': playerSurrender(); break;

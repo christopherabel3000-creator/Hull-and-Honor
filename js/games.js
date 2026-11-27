@@ -87,15 +87,17 @@ export function startPit(tier) {
   const t = PIT_TIERS[tier];
   return { game: 'pit', tier, bet: t.fee, you: 3, them: 3, over: false, lines: [`You step into the pit against ${t.name}. Strike beats feint, guard beats strike, feint beats guard.`] };
 }
-export function pitRound(g, move, dueling) {
+export function pitRound(g, move, dueling, armor = 0) {
   const t = PIT_TIERS[g.tier];
   const theirs = MOVES[rint(0, 2)];
   let youWin;
   if (BEATS[move] === theirs) youWin = true;
   else if (BEATS[theirs] === move) youWin = false;
   else youWin = Math.random() < Math.max(0.15, Math.min(0.85, 0.5 + 0.06 * (dueling - t.skill)));
-  if (youWin) g.them--; else g.you--;
-  const lead = `You ${move}, they ${theirs}. ${youWin ? 'You land a blow.' : 'They land a blow.'}`;
+  let blocked = false;
+  if (!youWin && Math.random() < armor * 0.08) blocked = true;
+  if (youWin) g.them--; else if (!blocked) g.you--;
+  const lead = `You ${move}, they ${theirs}. ${youWin ? 'You land a blow.' : blocked ? 'Their blow glances off your armor.' : 'They land a blow.'}`;
   g.lines = [`${lead} You ${g.you}, them ${g.them}.`];
   if (g.them <= 0) { g.over = true; g.result = 'win'; g.lines.push(`You win the fight and the ${t.purse} credit purse!`); }
   else if (g.you <= 0) { g.over = true; g.result = 'lose'; g.lines.push('You go down. The crowd roars for your opponent.'); }

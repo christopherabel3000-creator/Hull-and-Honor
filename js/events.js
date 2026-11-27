@@ -455,7 +455,7 @@ export function salvageStep(sv) {
   if (Math.random() < salvageDanger(sv)) {
     const h = pick(HAZARDS);
     out.push(h.text);
-    if (h.duel && Math.random() < 0.35 + api.sk('dueling') * 0.06) { out.push('You fight it off and get your crew member back.'); api.gainXP('dueling', 4, out); }
+    if (h.duel && Math.random() < 0.35 + api.sk('dueling') * 0.06 + api.weaponBonus() * 0.05) { out.push('You fight it off and get your crew member back.'); api.gainXP('dueling', 4, out); }
     else {
       if (h.crew) api.loseCrew(h.crew, out);
       if (h.hull) api.hullDamage(h.hull);

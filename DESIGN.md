@@ -278,6 +278,14 @@ Several arcs can be active in one campaign, and they can clash.
   - Void Dice: push your luck. Add up rolls; a 1 busts. When you stop, the house must beat you without busting.
   - Pit fights (not in Concord ports): three opponents with entry fees and purses (50/150, 150/450, 400/1,400). Choose strike, guard or feint each round; ties go to dueling skill. First to land three blows wins. Winning lifts crew morale; every round teaches dueling.
 
+## Personal gear (as built)
+
+- Shown in the Captain view, bought at any docked port. Buying replaces what you carry; the old item sells for half.
+- **Weapons** (attack): combat knife 1 (100), shock baton 1 (300, Concord), heavy pistol 2 (600), monofilament blade 3 (1,400, not Concord), plasma pistol 3 (2,500, pirate ports), duelist's saber 4 (4,000, pirate ports).
+- **Armor** (protection): padded vest 1 (200), flak jacket 2 (700), combat armor 3 (1,800, Concord and pirate ports), powered armor 4 (4,500, pirate ports and high-security Concord ports).
+- **Crew armory:** 3 levels (1,500, 3,500, 7,000), each making boarding parties 10% stronger.
+- **Effects:** attack adds to dueling in pit fights; attack (+5% each) and protection (+4% each) strengthen boarding fights and mutiny fights; in the pit, each point of protection gives an 8% chance to shrug off a lost round; losing a boarding fight, each point of protection gives a 10% chance to survive (you lose the ship instead and escape in a pod); attack also helps against things in derelicts.
+
 ## Build plan (proposed)
 
 1. Galaxy generation, travel and a basic trade loop. **(Built)**
