@@ -219,7 +219,7 @@ Several arcs can be active in one campaign, and they can clash.
 
 8. Jump events and derelict salvage. **(Built)**
 9. Galaxy events (famines, plagues, booms, blockades) and faction wars. **(Built)**
-10. Rival captains.
+10. Rival captains. **(Built)**
 11. Officers with personalities, and mission twists.
 12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights).
 
@@ -240,6 +240,16 @@ Several arcs can be active in one campaign, and they can clash.
 - **War contracts** at navy posts and pirate contacts of warring factions: run war supplies to your side's front (cargo), or strike the enemy at their front (combat). Each completed war contract shifts the war 12 points toward your side, raises your side and lowers the enemy.
 - **News view:** current wars (who's winning, nearest fronts), galaxy events with distance and days left, and recent headlines. New headlines are announced on arrival (up to three). Jump lane buttons mention events and war fronts at each destination, and the system summary mentions what's happening here.
 - Border changes are saved and re-applied whenever the galaxy is loaded.
+
+## Stage 10 details (as built)
+
+- **Six rivals** per campaign, one of each style: a trader (Guild), a smuggler and a pirate captain (each tied to a clan), a bounty hunter and a Concord navy captain (Concord), and a mercenary (tied to a clan). Each has a name, a named ship, a level from 1 to 10 and an attitude toward you from -100 to 100 (nemesis, hostile, neutral, friendly, ally).
+- **They live in the galaxy:** every 2 to 4 days each rival jumps to a neighboring system, preferring the kind of space their style favors. About once every 4 weeks a rival gains a level, which can mean a bigger ship. Their deeds show up in the news.
+- **Meeting a rival** in port opens a scene: buy them a drink, swap news (they tell you about a galaxy event), race them to the next port for a 300 credit wager (piloting and navigation against their level), insult them, challenge them to a fight (fighting styles only), or leave. Hostile fighting rivals attack half the time; a nemesis attacks almost always and steers toward you.
+- **Fighting a rival:** their ship scales with their level. Destroy it and they either escape in a pod (levels lost, attitude -30) or die. Take their ship and they're humiliated. If they surrender: spare them (+20, they remember), loot them (-10), take them prisoner (gone for good), or destroy them.
+- **Contract races:** when you take a cargo contract while a rival trader or smuggler is in port (or sometimes anyway), they race you. Arrive before their expected day and the client pays a 20% bonus; arrive after and you get 60%.
+- **Allies:** a fighting rival who is your ally and within 3 jumps has a 35% chance to jump into your fights, firing every turn.
+- The **Rivals** view lists every rival: style, strength, ship, which faction they side with, their attitude, where you last saw them, and their recent history with you.
 
 ## Build plan (proposed)
 

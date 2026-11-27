@@ -2,6 +2,7 @@
 import { GOODS } from './galaxy.js';
 import { getRep, changeRep, clanKey } from './reputation.js';
 import { makeEnemy } from './combat.js';
+import { rivalById, adjust, rivalEnemy, styleLabel, isCombat, attitudeName } from './rivals.js';
 
 let api = null;
 export function initEvents(a) { api = a; }
@@ -265,6 +266,44 @@ const EVENTS = {
     ],
   },
 };
+
+EVENTS.rival = {
+  title: 'A familiar ship',
+  weight: () => 0,
+  text: ctx => {
+    const r = rivalById(ctx.data.rivalId);
+    const mood = { ally: 'They greet you like an old friend.', friendly: 'They wave you over.', neutral: 'They give you a measuring look.', hostile: 'They glare at you across the docks.', nemesis: 'Their hand never leaves their weapon.' }[attitudeName(r.attitude)];
+    return `${r.name}, ${styleLabel(r)}, is here with the ${r.ship}. ${mood}`;
+  },
+  choices: ctx => {
+    const r = rivalById(ctx.data.rivalId);
+    const raceChance = Math.max(0.1, Math.min(0.9, 0.35 + 0.03 * (api.sk('piloting') + api.sk('navigation')) - 0.03 * r.level));
+    return [
+      { id: 'drink', label: 'Buy them a drink, 30 credits', run: (c, out) => {
+        api.charge(30, out);
+        if (r.attitude <= -25) { adjust(r, -2, 'Threw your drink back at you.', out); out.push('They throw it in your face.'); return null; }
+        adjust(r, 5, 'Shared a drink with you.', out); api.morale(1, out); out.push('You trade stories over a drink.'); return null;
+      } },
+      r.attitude >= 0 && { id: 'news', label: 'Swap news', run: (c, out) => { adjust(r, 1, null, out); api.tip(out); api.gainXP('trading', 2, out); return null; } },
+      r.attitude > -60 && { id: 'race', label: `Race them to the next port for 300 credits (piloting and navigation, ${Math.round(raceChance * 100)}% chance)`, run: (c, out) => {
+        if (c.st.credits < 300) { out.push('You don’t have 300 credits to wager.'); return { more: true }; }
+        api.gainXP('piloting', 3, out); api.gainXP('navigation', 3, out);
+        if (Math.random() < raceChance) { api.receive(300, out); adjust(r, r.attitude >= 25 ? 3 : -4, 'Lost a race to you.', out); out.push(`You beat the ${r.ship} by a hair and collect 300 credits.`); }
+        else { c.st.credits -= 300; adjust(r, 2, 'Beat you in a race.', out); out.push(`The ${r.ship} wins. You pay up 300 credits.`); }
+        return null;
+      } },
+      { id: 'insult', label: 'Insult them', run: (c, out) => {
+        adjust(r, -12, 'You insulted them.', out);
+        if (isCombat(r) && r.attitude <= -25) { out.push(`${r.name} storms off to their ship. They mean to settle this.`); return { combat: { enemy: rivalEnemy(r), range: 1, intro: `The ${r.ship} comes after you.` } }; }
+        out.push('They sneer and walk away.'); return null;
+      } },
+      isCombat(r) && { id: 'fight', label: 'Challenge them to a fight', run: (c, out) => { adjust(r, -15, 'You challenged them to a fight.', out); return { combat: { enemy: rivalEnemy(r), range: 2, intro: `${r.name} accepts your challenge.` } }; } },
+      { id: 'leave', label: 'Leave them be', run: (c, out) => { out.push('You go about your business.'); return null; } },
+    ];
+  },
+};
+
+export function rivalMeetEvent(r) { return { id: 'rival', data: { rivalId: r.id }, result: null }; }
 
 export function eventTitle(id) { return EVENTS[id].title; }
 

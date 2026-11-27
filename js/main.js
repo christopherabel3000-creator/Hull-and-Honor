@@ -17,8 +17,9 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
-import { initWorld, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
-import { initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
+import { initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
+import { initWorld, news as pushNews, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
+import { rivalMeetEvent, initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
@@ -43,6 +44,7 @@ function ensureShip(st) {
   ensureStory(st);
   if (!st.caches) st.caches = [];
   ensureWorld(st);
+  ensureRivals(st);
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -59,6 +61,7 @@ const live = document.getElementById('live');
 let state = null;
 let galaxy = null;
 initWorld({ state: () => state, galaxy: () => galaxy });
+initRivals({ state: () => state, galaxy: () => galaxy, news: t => pushNews(t) });
 initEvents({
   state: () => state, here: () => here(), sk: id => sk(id), gainXP: (id, n, o) => gainXP(id, n, o),
   receive: (n, o) => receive(n, o), charge: (n, o) => charge(n, o), morale: (d, o) => morale(d, o), conduct: (k, o) => conduct(k, o),
@@ -77,6 +80,12 @@ initEvents({
     return n;
   },
   freeSpace: () => freeSpace(),
+  tip: o => {
+    const list = eventList().filter(x => x.sys !== state.location);
+    if (!list.length) { o.push('They have no news worth sharing.'); return; }
+    const x = list[Math.floor(Math.random() * list.length)];
+    o.push(`They tell you: ${x.name.toLowerCase()} at ${x.sys != null ? galaxy.systems[x.sys].name : `the ${x.place}`}, ${x.effect}.`);
+  },
   hullDamage: n => { state.ship.hull = Math.max(1, state.ship.hull - n); },
   damageSystem: () => { const x = SYSTEMS[Math.floor(Math.random() * 3)]; state.ship.sys[x] = Math.max(0, state.ship.sys[x] - 1); return x; },
   passDays: (n, o) => { state.day += n; payWages(n, o); accrueInterest(n, o); checkDeadlines(o); refreshMarket(state, state.location); },
@@ -195,6 +204,13 @@ function warContracts(sys) {
 // ---------- contracts ----------
 function completeMission(m, msgs) {
   state.missions = state.missions.filter(x => x !== m);
+  if (m.race) {
+    const r = rivalById(m.race.rivalId);
+    if (r && r.alive) {
+      if (state.day > m.race.eta) { m.pay = Math.round(m.pay * 0.6 / 10) * 10; msgs.push(`${r.name} got there first. The client pays you less.`); adjust(r, 1, 'Beat you to a delivery.', msgs); }
+      else { m.pay = Math.round(m.pay * 1.2 / 10) * 10; msgs.push(`You beat ${r.name} there, and the client pays a bonus.`); adjust(r, -3, 'You beat them to a delivery.', msgs); }
+    }
+  }
   msgs.push(`Contract complete: ${missionTitle(m, galaxy)}. Paid ${m.pay} credits.`);
   receive(m.pay, msgs);
   if (m.type === 'smuggle') {
@@ -305,6 +321,7 @@ function newGame(captain, ship, seedText, ironman) {
   ensureSkills(state);
   ensureWorld(state);
   ensureRep(state, galaxy);
+  ensureRivals(state);
   arrive(galaxy.start);
   log(`${state.captain} takes command of the ${state.shipName} at ${here().name}.`);
   save();
@@ -466,7 +483,7 @@ function jump(to) {
   gainXP('navigation', 1 + Math.floor(lane.ly / 5));
   state.fuel -= cost.fuel;
   state.day += cost.days;
-  advanceWorld();
+  advanceWorld(); tickRivals();
   ui.confirmAbandon = null;
   const msgs = [];
   payWages(cost.days, msgs);
@@ -481,7 +498,8 @@ function jump(to) {
   msgs.unshift(`Arrived at ${sys.name} after ${plural(cost.days, 'day')}. Fuel ${state.fuel} of ${state.ship.tank}.`);
   log(`Jumped from ${from.name} to ${sys.name}.`);
   if (mutinyCheck()) { startMutiny(msgs); return; }
-  const enc = missionEncounter(sys) || blockadeEncounter(sys, msgs) || randomEncounter(sys);
+  const enc = missionEncounter(sys) || blockadeEncounter(sys, msgs) || rivalEncounter(sys) || randomEncounter(sys);
+  if (enc && enc.event) { beginEvent(enc.event, msgs); return; }
   if (enc && enc.message) msgs.push(enc.message);
   else if (enc) { startCombat(enc, true, msgs); return; }
   let ev = null;
@@ -547,10 +565,23 @@ function acceptMission(id) {
   if (missionSpace(m) > freeSpace()) { announce(`Not enough hold space. This contract needs ${missionSpace(m)}, you have ${freeSpace()} free.`); return; }
   sysState(state, state.location).board.missions = board.filter(x => x !== m);
   state.missions.push(m);
+  let raceMsg = '';
+  if (['freight', 'dispatch', 'smuggle', 'warsupply'].includes(m.type)) {
+    const present = rivalAt(state.location);
+    const racer = present && (present.style === 'trader' || present.style === 'smuggler') ? present
+      : rand() < 0.12 ? aliveRivals().filter(r => r.style === 'trader' || r.style === 'smuggler')[Math.floor(rand() * 2)] : null;
+    if (racer) {
+      const path = shortestPath(galaxy, state.location, m.dest);
+      let days = 0;
+      for (let i = 0; i < path.length - 1; i++) days += navCost(galaxy.adj[path[i]].find(l => l.to === path[i + 1]).ly).days;
+      m.race = { rivalId: racer.id, eta: state.day + Math.max(1, Math.round(days * (0.85 + rand() * 0.4))) };
+      raceMsg = ` ${racer.name} of the ${racer.ship} is racing you for the client's favor, expected to arrive around day ${m.race.eta}.`;
+    }
+  }
   log(`Accepted: ${missionTitle(m, galaxy)} (${m.pay} credits, due day ${m.deadline}).`);
   save();
   render();
-  announce(`Accepted: ${missionTitle(m, galaxy)}. Due day ${m.deadline}.`);
+  announce(`Accepted: ${missionTitle(m, galaxy)}. Due day ${m.deadline}.${raceMsg}`);
 }
 
 function deliverProcurement(id) {
@@ -1007,6 +1038,17 @@ function missionCombat(m) {
   return { enemy, range: 2, missionId: m.id, intro: `A ${sys.clan} ${enemy.name} moves to attack.` };
 }
 
+function rivalEncounter(sys) {
+  const r = rivalAt(sys.id);
+  if (!r) return null;
+  seenAt(r);
+  if (r.attitude <= -25 && isCombat(r) && rand() < (r.attitude <= -60 ? 0.9 : 0.5)) {
+    return { enemy: rivalEnemy(r), range: 2, intro: r.attitude <= -60 ? `${r.name} has hunted you down. The ${r.ship} attacks!` : `${r.name} and the ${r.ship} are here, and they want a fight.` };
+  }
+  if (rand() < 0.6) return { event: rivalMeetEvent(r) };
+  return { message: `${r.name}'s ship, the ${r.ship}, is in port here.` };
+}
+
 function blockadeEncounter(sys, msgs) {
   const bl = blockadeAt(sys.id);
   if (!bl || rand() >= 0.7) return null;
@@ -1073,7 +1115,13 @@ function startCombat(enc, pendingArrival, msgs = []) {
   if (!state.ironman) { try { localStorage.setItem(PREFIGHT_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
   state.ship.shield = state.ship.shieldMax;
   applyCaptain();
+  let ally = null;
+  if (!enc.enemy.rivalId && !enc.approach) {
+    const a = nearbyAlly();
+    if (a && rand() < 0.35) { ally = { id: a.id, name: a.name, ship: a.ship, dmg: 4 + a.level * 2 }; msgs = [...msgs]; enc = { ...enc, intro: `${enc.intro} Your ally ${a.name} answers your call, and the ${a.ship} jumps in beside you!` }; }
+  }
   state.combat = {
+    ally,
     enemy: enc.enemy, range: enc.range, turn: 0, move: 0, target: 'hull',
     phase: enc.approach ? 'approach' : 'fight', lines: [], intro: enc.intro,
     missionId: enc.missionId ?? null, pendingArrival, pendingMsgs: msgs, outcome: null, resultText: [],
@@ -1103,6 +1151,15 @@ function combatAction(action) {
   if (r.boarded || action === 'board') gainXP('dueling', 8, xm);
   if (r.demanded) gainXP('negotiation', 3, xm);
   cb.lines = [...r.lines, ...xm];
+  if (!r.outcome && cb.ally && cb.phase === 'fight') {
+    const e = cb.enemy;
+    let d = Math.round(cb.ally.dmg * (0.7 + rand() * 0.6));
+    const abs = Math.min(e.shield, d);
+    e.shield -= abs;
+    e.hull = Math.max(0, e.hull - (d - abs));
+    cb.lines.push(`The ${cb.ally.ship} fires: ${d} damage.`);
+    if (e.hull <= 0) { cb.lines.push('Their ship explodes.'); endFight('enemy-destroyed', cb.lines); return; }
+  }
   if (r.outcome) { endFight(r.outcome, cb.lines); return; }
   save();
   render();
@@ -1241,12 +1298,41 @@ function endFight(outcome, lines) {
   } else if (outcome === 'player-escaped' || outcome === 'separated') {
     failEscort(msgs);
   }
+  rivalOutcome(outcome, msgs);
   cb.phase = 'result';
   cb.resultText = [...lines, ...msgs];
   save();
   ui.focus = 'combat-result';
   render();
   announce(cb.resultText.join(' '));
+}
+
+function rivalOutcome(outcome, msgs) {
+  const cb = state.combat;
+  if (cb.ally && ['enemy-destroyed', 'captured', 'enemy-surrendered'].includes(outcome)) {
+    const a = rivalById(cb.ally.id);
+    if (a) adjust(a, 2, 'Fought beside you.', msgs);
+  }
+  const id = cb.enemy.rivalId;
+  if (!id) return;
+  const r = rivalById(id);
+  if (!r || !r.alive) return;
+  const kill = (how) => { r.alive = false; pushNews(`Captain ${r.name} of the ${r.ship} was ${how} by Captain ${state.captain}.`); addNotoriety(state, 3); };
+  switch (outcome) {
+    case 'enemy-destroyed':
+      if (rand() < 0.5) { adjust(r, -30, 'You destroyed their ship.', msgs); r.level = Math.max(1, r.level - 2); msgs.push(`${r.name} escapes in a pod, swearing revenge.`); }
+      else { msgs.push(`${r.name} goes down with the ${r.ship}.`); kill('killed in battle'); }
+      break;
+    case 'captured': adjust(r, -20, 'You took their ship.', msgs); r.level = Math.max(1, r.level - 1); msgs.push(`${r.name} is set adrift with their crew, humiliated.`); break;
+    case 'looted': adjust(r, -10, 'You looted their ship.', msgs); break;
+    case 'released': adjust(r, 20, 'You spared them after they surrendered.', msgs); msgs.push(`${r.name} won't forget your mercy.`); break;
+    case 'prisoner': r.alive = false; pushNews(`Captain ${r.name} of the ${r.ship} was taken prisoner by Captain ${state.captain}.`); break;
+    case 'executed': kill('executed after surrendering'); break;
+    case 'player-destroyed': adjust(r, -3, 'Destroyed your ship.', msgs); r.level = Math.min(10, r.level + 1); break;
+    case 'player-escaped': adjust(r, -2, 'Watched you run.', msgs); break;
+    case 'enemy-escaped': adjust(r, -4, 'Fled from you.', msgs); break;
+    default: break;
+  }
 }
 
 function surrenderChoice(choice) {
@@ -1263,6 +1349,7 @@ function surrenderChoice(choice) {
     conduct('atrocity', msgs);
     defeatEffects('destroyed', msgs);
   }
+  rivalOutcome({ loot: 'looted', prisoner: 'prisoner', release: 'released', destroy: 'executed' }[choice], msgs);
   cb.outcome = 'resolved';
   cb.resultText = msgs;
   save();
@@ -1745,7 +1832,8 @@ function missionDetails(m, hops) {
   const due = left === 0 ? 'due today' : `due day ${m.deadline}, ${plural(left, 'day')} left`;
   const where = m.dest === state.location ? 'here' : `${plural(hops[m.dest], 'jump')} away, ${dest.authority}`;
   const space = missionSpace(m) ? `, takes ${missionSpace(m)} hold space` : '';
-  const risk = m.type === 'smuggle' && dest.authority === 'Concord' ? ', customs risk at destination' : '';
+  const risk = (m.type === 'smuggle' && dest.authority === 'Concord' ? ', customs risk at destination' : '')
+    + (m.race && rivalById(m.race.rivalId) ? `, racing ${rivalById(m.race.rivalId).name}, who should arrive around day ${m.race.eta}` : '');
   return `${missionTitle(m, galaxy)} (${where}). For the ${factionName(m.faction)}. Pays ${m.pay}, ${due}${space}${risk}.`;
 }
 
@@ -2067,6 +2155,22 @@ function localSituation(sys) {
   return parts.length ? ` Here: ${parts.join(', ')}.` : '';
 }
 
+function rivalsHTML() {
+  const hops = hopCounts(galaxy, state.location);
+  const items = state.rivals.map(r => {
+    if (!r.alive) return `<li><p>${esc(r.name)} of the ${esc(r.ship)}: out of the game. ${r.history[0] ? esc(r.history[0].note) : ''}</p></li>`;
+    const where = !r.met ? 'You have never crossed paths.'
+      : r.loc === state.location ? 'Here now.'
+      : `Last seen at ${esc(galaxy.systems[r.seen.sys].name)}, ${state.day === r.seen.day ? 'today' : `${plural(state.day - r.seen.day, 'day')} ago`}, ${r.seen.sys === state.location ? 'here' : `${plural(hops[r.seen.sys], 'jump')} away`}.`;
+    const hist = r.history.slice(0, 3).map(h => esc(h.note)).join(' ');
+    const lvl = r.level >= 8 ? 'legendary' : r.level >= 6 ? 'formidable' : r.level >= 4 ? 'experienced' : 'up and coming';
+    return `<li><p>${esc(r.name)} of the ${esc(r.ship)}, ${styleLabel(r)}, ${lvl}, flying a ${rivalShipKind(r)}. Sides with the ${rivalFaction(r)}. Toward you: ${attitudeName(r.attitude)}. ${where}${hist ? ` History: ${hist}` : ''}</p></li>`;
+  }).join('');
+  return `<section id="sec-rivals" aria-labelledby="h-rivals"><h2 id="h-rivals" tabindex="-1">Rival captains</h2>
+    <p>Other captains travel the galaxy and grow stronger, just like you. They remember how you treat them. Allies may jump in to help you in a fight; nemeses hunt you.</p>
+    <ul class="cards">${items}</ul></section>`;
+}
+
 function newsHTML() {
   const hops = hopCounts(galaxy, state.location);
   const away = id => (id === state.location ? 'here' : `${plural(hops[id], 'jump')} away`);
@@ -2191,7 +2295,7 @@ function mutinyHTML() {
     <button data-action="mutiny" data-arg="yield" data-key="mutiny-yield">Give up command</button>`;
 }
 
-const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['news', 'News'], ['records', 'Records']];
+const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Market'], ['shipyard', 'Shipyard'], ['captain', 'Captain'], ['crew', 'Crew'], ['rivals', 'Rivals'], ['news', 'News'], ['records', 'Records']];
 
 function gameHTML() {
   if (state.mutiny) return mutinyHTML();
@@ -2209,6 +2313,7 @@ function gameHTML() {
     case 'crew': view = crewHTML(); break;
     case 'captain': view = captainHTML(); break;
     case 'news': view = newsHTML(); break;
+    case 'rivals': view = rivalsHTML(); break;
     case 'records': view = `${reputationHTML()}${logHTML()}
       <section id="sec-game" aria-labelledby="h-game"><h2 id="h-game" tabindex="-1">Game</h2>
       <p>Your campaign saves automatically.${state.ironman ? ' One life mode: there are no manual saves.' : ''}</p>
@@ -2229,7 +2334,7 @@ function render() {
   const key = active && active.dataset ? active.dataset.key : null;
   const section = active && active.closest ? active.closest('section') : null;
   const sectionId = section ? section.id : null;
-  if (ui.screen === 'game') { advanceWorld(); save(); }
+  if (ui.screen === 'game') { advanceWorld(); tickRivals(); save(); }
   app.innerHTML = ui.screen === 'title' ? titleHTML() : ui.screen === 'gameover' ? gameOverHTML() : ui.screen === 'help' ? helpHTML() : gameHTML();
   let target = null;
   if (ui.focus === 'view-first') { target = app.querySelector('#view h2'); ui.focus = null; }

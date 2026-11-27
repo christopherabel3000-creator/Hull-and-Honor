@@ -43,7 +43,7 @@ export function applyControl(g, st) {
   for (const [id, c] of Object.entries(st.world.control)) Object.assign(g.systems[Number(id)], c);
 }
 
-function news(text) {
+export function news(text) {
   const w = api.state().world;
   w.newsCount = (w.newsCount || 0) + 1;
   w.news.unshift({ id: w.newsCount, day: api.state().day, text });
