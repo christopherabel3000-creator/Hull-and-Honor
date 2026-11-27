@@ -215,6 +215,22 @@ Several arcs can be active in one campaign, and they can clash.
 - Economy depth: how prices react to your own trading.
 - Name check for conflicts (itch.io, Steam, App Store).
 
+## Variety roadmap
+
+8. Jump events and derelict salvage. **(Built)**
+9. Galaxy events (famines, plagues, booms, blockades) and faction wars.
+10. Rival captains.
+11. Officers with personalities, and mission twists.
+12. Property (warehouses, trade route shares, a station) and port games (cards, dice, pit fights).
+
+## Stage 8 details (as built)
+
+- About 1 arrival in 4 without a fight brings a **jump event**: a short scene with choices. Some choices are skill checks, shown with the skill and the chance (base chance plus 6% per level); checks teach the skill either way.
+- **Events:** distress beacon (may be a pirate trap; scan it first with navigation), stowaway (sometimes a fugitive), ion storm, a smuggler's offer, escape pod (merchant, spacer or wanted pirate), derelict, debris field, customs checkpoint (only in Concord space while carrying contraband: bribe, bluff, dump or run), crew dispute, a strange nebula, fuel leak, pirate toll (lawless space, when the clan doesn't Like you), merchant breakdown (help or rob), black box (decode it for cache coordinates).
+- Event weights depend on security, your cargo, crew size and standing.
+- **Derelict salvage:** a push-your-luck run. Each section deeper has a higher chance of trouble (10% plus 8% per section, less with repairs skill): crew lost, hull damage, or something in the dark (dueling can save your crew member). Sections hold credits or valuable goods; the last section holds 800–2,000 credits or intact parts installed as a free upgrade. You keep the haul only by returning to your ship. Caches from black boxes are deeper derelicts.
+- Cache coordinates are listed in the Bridge status.
+
 ## Build plan (proposed)
 
 1. Galaxy generation, travel and a basic trade loop. **(Built)**

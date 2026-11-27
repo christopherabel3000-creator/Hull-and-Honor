@@ -17,6 +17,7 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
+import { initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
 
 const SAVE_KEY = 'hullandhonor.save.v1';
 const PREFIGHT_KEY = 'hullandhonor.prefight.v1';
@@ -39,6 +40,7 @@ function ensureShip(st) {
   if (st.debt == null) st.debt = 0;
   ensureSkills(st);
   ensureStory(st);
+  if (!st.caches) st.caches = [];
 }
 function newStarterShip(crew = 6) {
   const ship = buildShip('mule');
@@ -54,6 +56,53 @@ const live = document.getElementById('live');
 
 let state = null;
 let galaxy = null;
+initEvents({
+  state: () => state, here: () => here(), sk: id => sk(id), gainXP: (id, n, o) => gainXP(id, n, o),
+  receive: (n, o) => receive(n, o), charge: (n, o) => charge(n, o), morale: (d, o) => morale(d, o), conduct: (k, o) => conduct(k, o),
+  freeCrewBerths: () => state.ship.crewMax - state.ship.crew, crewCount: () => state.ship.crew,
+  addCrew: (n, lean) => {
+    const c = state.crew, old = state.ship.crew, total = old + n;
+    c.lean = Math.round((c.lean * old + lean * n) / total);
+    c.loyalty = Math.round((c.loyalty * old + 60 * n) / total);
+    state.ship.crew = total;
+  },
+  addCargo: (goodId, qty, cost = 0) => {
+    const n = Math.max(0, Math.min(qty, freeSpace()));
+    if (!n) return 0;
+    const slot = state.cargo[goodId] || (state.cargo[goodId] = { qty: 0, cost: 0 });
+    slot.qty += n; slot.cost += n * cost;
+    return n;
+  },
+  freeSpace: () => freeSpace(),
+  hullDamage: n => { state.ship.hull = Math.max(1, state.ship.hull - n); },
+  damageSystem: () => { const x = SYSTEMS[Math.floor(Math.random() * 3)]; state.ship.sys[x] = Math.max(0, state.ship.sys[x] - 1); return x; },
+  passDays: (n, o) => { state.day += n; payWages(n, o); accrueInterest(n, o); checkDeadlines(o); refreshMarket(state, state.location); },
+  carryingContraband: () => carryingContraband(),
+  seizeContraband: o => seizeContraband(o),
+  dumpContraband: o => {
+    for (const g of GOODS) if (g.illegal) delete state.cargo[g.id];
+    for (const m of [...state.missions]) if (isContraband(m)) failMission(m, o, 'cargo dumped', 4);
+  },
+  loseFuel: n => { state.fuel = Math.max(0, state.fuel - n); },
+  loseCrew: (n, o) => { const k = Math.min(n, state.ship.crew); state.ship.crew -= k; if (k) o.push(k === 1 ? 'You lose a crew member.' : `You lose ${k} crew.`); },
+  freeUpgradeSlot: () => state.ship.upgrades.length < state.ship.slots && Object.keys(UPGRADES).some(u => !state.ship.upgrades.includes(u)),
+  grantUpgrade: () => {
+    const opts = Object.keys(UPGRADES).filter(u => !state.ship.upgrades.includes(u));
+    const id = opts[Math.floor(Math.random() * opts.length)];
+    const hullWas = state.ship.hullMax;
+    state.ship.upgrades.push(id);
+    applyStats(state.ship);
+    if (id === 'armor') state.ship.hull += state.ship.hullMax - hullWas;
+    return UPGRADES[id].name.toLowerCase();
+  },
+  addCache: () => {
+    const hops = hopCounts(galaxy, state.location);
+    const pool = galaxy.systems.filter(x => hops[x.id] >= 2 && hops[x.id] <= 6 && !state.caches.includes(x.id));
+    const dest = pool[Math.floor(Math.random() * pool.length)] || galaxy.systems[state.location];
+    state.caches.push(dest.id);
+    return dest.name;
+  },
+});
 initStory({ state: () => state, galaxy: () => galaxy, receive: (n, msgs) => receive(n, msgs), charge: (n, msgs) => charge(n, msgs), log: m => log(m) });
 const ui = { confirmSlot: null, view: 'bridge', confirmBuyShip: null, screen: 'title', confirmNew: false, confirmAbandon: null, confirmSurrender: false, priceGood: 'food', plotSelect: null, focus: null };
 
@@ -172,6 +221,12 @@ function customsScan(sys, msgs) {
     gainXP('deception', 3, msgs);
     return;
   }
+  msgs.push('Customs scans your ship.');
+  seizeContraband(msgs);
+}
+
+function seizeContraband(msgs) {
+  const sys = here();
   let value = 0;
   for (const g of GOODS) {
     if (g.illegal && state.cargo[g.id]) {
@@ -183,7 +238,7 @@ function customsScan(sys, msgs) {
   for (const m of seized) value += m.units * 200;
   const fine = Math.min(state.credits, Math.round(value * 1.5));
   state.credits -= fine;
-  msgs.push(`Customs scan! Your contraband was found and seized. Fined ${fine} credits.`);
+  msgs.push(`Your contraband is found and seized. Fined ${fine} credits.`);
   log(`Caught by customs at ${sys.name}. Fined ${fine} credits.`);
   changeRep(state, 'concord', -8, msgs);
   changeLocal(state, galaxy, sys.id, -10, msgs);
@@ -201,7 +256,7 @@ function newGame(captain, ship, seedText, ironman) {
     ship: newStarterShip(), fuel: 12, crew: { loyalty: 60, lean: 0, skill: 1, owed: 0, lastBonusDay: -99 },
     location: galaxy.start, cargo: {}, systems: {}, course: null, log: [],
     ironman: !!ironman, insurance: { plan: 'none', expires: 0, claims: 0 }, debt: 0, arcs: {}, perks: {},
-    skills: null, skillPoints: 3, contractsDone: 0,
+    skills: null, skillPoints: 3, contractsDone: 0, caches: [],
   };
   try { localStorage.removeItem(PREFIGHT_KEY); } catch (e) { /* ignore */ }
   ensureSkills(state);
@@ -224,7 +279,7 @@ function continueGame() {
   ensureShip(state);
   refreshMarket(state, state.location);
   ui.screen = state.dead ? 'gameover' : 'game';
-  ui.focus = state.dead ? 'over-heading' : state.combat ? 'combat-heading' : 'sys-heading';
+  ui.focus = state.dead ? 'over-heading' : state.mutiny ? 'mutiny-heading' : state.event ? 'event-heading' : state.salvage ? 'salvage-heading' : state.combat ? 'combat-heading' : 'sys-heading';
   render();
 }
 
@@ -383,6 +438,14 @@ function jump(to) {
   const enc = missionEncounter(sys) || randomEncounter(sys);
   if (enc && enc.message) msgs.push(enc.message);
   else if (enc) { startCombat(enc, true, msgs); return; }
+  let ev = null;
+  if (state.caches.includes(sys.id)) {
+    state.caches = state.caches.filter(x => x !== sys.id);
+    ev = startEvent('derelict', sys);
+    ev.data.cache = true;
+    msgs.push('You reach the coordinates from the black box.');
+  } else ev = rollEvent(sys);
+  if (ev) { beginEvent(ev, msgs); return; }
   finishArrival(msgs);
 }
 
@@ -1290,7 +1353,7 @@ function slotSummary(st) {
 }
 function saveToSlot(i) {
   if (state.ironman) return;
-  if (state.combat || state.mutiny) { announce('You cannot save in the middle of this.'); return; }
+  if (state.combat || state.mutiny || state.event || state.salvage) { announce('You cannot save in the middle of this.'); return; }
   const existing = readKey(slotKey(i));
   if (existing && ui.confirmSlot !== i) {
     ui.confirmSlot = i;
@@ -1398,6 +1461,96 @@ function buyMissiles() {
   announce(`Bought ${plural(n, 'missile')}. Missiles ${state.ship.missiles} of ${state.ship.missilesMax}.`);
 }
 
+
+// ---------- jump events and salvage ----------
+function beginEvent(ev, msgs) {
+  state.event = ev;
+  save();
+  ui.focus = 'event-heading';
+  render();
+  const v = eventView(ev);
+  announce([...msgs, `${v.title}. ${v.text}`].join(' '));
+}
+
+function eventChoice(choiceId) {
+  const ev = state.event;
+  const before = eventView(ev).text;
+  const r = chooseEvent(ev, choiceId);
+  if (!r.done) {
+    ev.lines = r.lines;
+    save(); render();
+    const v = eventView(ev);
+    announce([...r.lines, v.text !== before ? v.text : ''].filter(Boolean).join(' '));
+    return;
+  }
+  if (r.combat) {
+    state.event = null;
+    startCombat(r.combat, true, r.lines);
+    return;
+  }
+  if (r.salvage) {
+    state.event = null;
+    state.salvage = startSalvage(r.salvage);
+    if (ev.data.cache) state.salvage.maxDepth += 2;
+    save();
+    ui.focus = 'salvage-heading';
+    render();
+    announce(`${state.salvage.log.join(' ')} Each section deeper is riskier, and you keep what you find only if you return.`);
+    return;
+  }
+  ev.result = r.lines;
+  ev.lines = [];
+  save();
+  ui.focus = 'event-result';
+  render();
+  announce(r.lines.join(' '));
+}
+
+function leaveEvent() {
+  state.event = null;
+  finishArrival([]);
+}
+
+function salvageAction(kind) {
+  const sv = state.salvage;
+  if (kind === 'deeper' && !sv.over) {
+    const lines = salvageStep(sv);
+    save(); render();
+    announce(lines.join(' '));
+    return;
+  }
+  const msgs = finishSalvage(sv);
+  state.salvage = null;
+  log(`Salvaged a derelict ${sv.name}.`);
+  finishArrival(msgs);
+}
+
+function eventHTML() {
+  const ev = state.event;
+  const v = eventView(ev);
+  if (ev.result) {
+    return `<h1 id="event-heading" tabindex="-1">${esc(v.title)}</h1>
+      <section aria-labelledby="event-result"><h2 id="event-result" tabindex="-1">Outcome</h2>
+      <ul>${ev.result.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
+      <button data-action="ev-leave" data-key="ev-leave">Continue</button></section>`;
+  }
+  const lines = (ev.lines || []).map(l => `<p>${esc(l)}</p>`).join('');
+  const btns = v.choices.map(c => `<button data-action="ev-choose" data-arg="${c.id}" data-key="ev-${c.id}">${esc(c.label)}</button>`).join(' ');
+  return `<h1 id="event-heading" tabindex="-1">${esc(v.title)}</h1>${lines}${v.text ? `<p>${esc(v.text)}</p>` : ''}<p>${btns}</p>`;
+}
+
+function salvageHTML() {
+  const sv = state.salvage;
+  const d = Math.round(salvageDanger(sv) * 100);
+  const goods = Object.entries(sv.haul.goods).map(([g, q]) => `${q} ${good(g).name}`).join(', ');
+  const haul = `${sv.haul.credits} credits${goods ? `, ${goods}` : ''}`;
+  return `<h1 id="salvage-heading" tabindex="-1">Derelict ${esc(sv.name)}</h1>
+    <ul>${sv.log.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
+    <p>Section ${sv.depth} explored. Haul so far: ${haul}. Crew ${state.ship.crew}, hull ${state.ship.hull} of ${state.ship.hullMax}.</p>
+    ${sv.over ? '' : `<button data-action="sv-deeper" data-key="sv-deeper">Push deeper, about ${d}% risk of trouble</button>`}
+    <button data-action="sv-leave" data-key="sv-leave">Return to your ship with the haul</button>`;
+}
+
 // ---------- rendering ----------
 function titleHTML() {
   const saved = loadSave();
@@ -1454,6 +1607,7 @@ function statusHTML() {
   }
   return `<section id="sec-status" aria-labelledby="h-status"><h2 id="h-status" tabindex="-1">Status</h2><ul>
     <li>Hold: ${holdContents()}</li>
+    ${state.caches.length ? `<li>Cache coordinates: ${state.caches.map(id => esc(galaxy.systems[id].name)).join(', ')}</li>` : ''}
     <li>Ship: the ${esc(state.shipName)}, ${state.ship.cls}</li>
     <li>Systems: ${systemsText(state.ship)}</li>
     <li>Crew: ${state.ship.crew} of ${state.ship.crewMax}</li>
@@ -1925,6 +2079,8 @@ const VIEWS = [['bridge', 'Bridge'], ['contracts', 'Contracts'], ['market', 'Mar
 
 function gameHTML() {
   if (state.mutiny) return mutinyHTML();
+  if (state.event) return eventHTML();
+  if (state.salvage) return salvageHTML();
   if (state.combat) return combatHTML();
   const sys = here();
   const isDocked = docked();
@@ -2019,6 +2175,10 @@ app.addEventListener('click', e => {
     case 'c-demand': combatAction('demand'); break;
     case 'c-repair': combatAction('repair'); break;
     case 'sellcargo': sellAllCargo(); break;
+    case 'ev-choose': eventChoice(arg); break;
+    case 'ev-leave': leaveEvent(); break;
+    case 'sv-deeper': salvageAction('deeper'); break;
+    case 'sv-leave': salvageAction('leave'); break;
     case 'serviceall': serviceAll(); break;
     case 'distress': distressCall(); break;
     case 'help': ui.helpFrom = ui.screen; ui.screen = 'help'; ui.focus = 'help-heading'; render(); break;
