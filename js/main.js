@@ -17,7 +17,7 @@ import {
   applyStats, buildShip, tradeInValue,
 } from './ships.js';
 import { ARCS, initStory, ensureStory, checkTriggers, acceptArc, declineArc, chooseOption, storyMissionDone, failArc, storyEntries } from './story.js';
-import { initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
+import { retireRival, initRivals, ensureRivals, tickRivals, rivalAt, rivalById, aliveRivals, adjust, rivalEnemy, seenAt, isCombat, attitudeName, nearbyAlly, styleLabel, rivalFaction, rivalShipKind } from './rivals.js';
 import { initWorld, news as pushNews, ensureWorld, applyControl, advanceWorld, freshNews, fronts, frontWarAt, warContribution, warStatus, blockadeAt, surgeAt, eventsAt, eventList } from './world.js';
 import { rivalMeetEvent, initEvents, rollEvent, startEvent, eventView, chooseEvent, startSalvage, salvageStep, finishSalvage, salvageDanger } from './events.js';
 
@@ -1317,7 +1317,7 @@ function rivalOutcome(outcome, msgs) {
   if (!id) return;
   const r = rivalById(id);
   if (!r || !r.alive) return;
-  const kill = (how) => { r.alive = false; pushNews(`Captain ${r.name} of the ${r.ship} was ${how} by Captain ${state.captain}.`); addNotoriety(state, 3); };
+  const kill = (how) => { retireRival(r); r.killedByPlayer = true; pushNews(`Captain ${r.name} of the ${r.ship} was ${how} by Captain ${state.captain}.`); addNotoriety(state, 3); };
   switch (outcome) {
     case 'enemy-destroyed':
       if (rand() < 0.5) { adjust(r, -30, 'You destroyed their ship.', msgs); r.level = Math.max(1, r.level - 2); msgs.push(`${r.name} escapes in a pod, swearing revenge.`); }
@@ -1326,7 +1326,7 @@ function rivalOutcome(outcome, msgs) {
     case 'captured': adjust(r, -20, 'You took their ship.', msgs); r.level = Math.max(1, r.level - 1); msgs.push(`${r.name} is set adrift with their crew, humiliated.`); break;
     case 'looted': adjust(r, -10, 'You looted their ship.', msgs); break;
     case 'released': adjust(r, 20, 'You spared them after they surrendered.', msgs); msgs.push(`${r.name} won't forget your mercy.`); break;
-    case 'prisoner': r.alive = false; pushNews(`Captain ${r.name} of the ${r.ship} was taken prisoner by Captain ${state.captain}.`); break;
+    case 'prisoner': retireRival(r); pushNews(`Captain ${r.name} of the ${r.ship} was taken prisoner by Captain ${state.captain}.`); break;
     case 'executed': kill('executed after surrendering'); break;
     case 'player-destroyed': adjust(r, -3, 'Destroyed your ship.', msgs); r.level = Math.min(10, r.level + 1); break;
     case 'player-escaped': adjust(r, -2, 'Watched you run.', msgs); break;
@@ -2157,8 +2157,8 @@ function localSituation(sys) {
 
 function rivalsHTML() {
   const hops = hopCounts(galaxy, state.location);
-  const items = state.rivals.map(r => {
-    if (!r.alive) return `<li><p>${esc(r.name)} of the ${esc(r.ship)}: out of the game. ${r.history[0] ? esc(r.history[0].note) : ''}</p></li>`;
+  const items = [...state.rivals].sort((x, y) => (y.alive ? 1 : 0) - (x.alive ? 1 : 0)).map(r => {
+    if (!r.alive) return `<li><p>${esc(r.name)} of the ${esc(r.ship)}, ${styleLabel(r)}: gone since day ${r.goneDay}.${r.replaced ? '' : ' Word is someone new will fill the gap soon.'}</p></li>`;
     const where = !r.met ? 'You have never crossed paths.'
       : r.loc === state.location ? 'Here now.'
       : `Last seen at ${esc(galaxy.systems[r.seen.sys].name)}, ${state.day === r.seen.day ? 'today' : `${plural(state.day - r.seen.day, 'day')} ago`}, ${r.seen.sys === state.location ? 'here' : `${plural(hops[r.seen.sys], 'jump')} away`}.`;

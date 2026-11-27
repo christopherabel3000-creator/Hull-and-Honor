@@ -249,6 +249,7 @@ Several arcs can be active in one campaign, and they can clash.
 - **Fighting a rival:** their ship scales with their level. Destroy it and they either escape in a pod (levels lost, attitude -30) or die. Take their ship and they're humiliated. If they surrender: spare them (+20, they remember), loot them (-10), take them prisoner (gone for good), or destroy them.
 - **Contract races:** when you take a cargo contract while a rival trader or smuggler is in port (or sometimes anyway), they race you. Arrive before their expected day and the client pays a 20% bonus; arrive after and you get 60%.
 - **Allies:** a fighting rival who is your ally and within 3 jumps has a 35% chance to jump into your fights, firing every turn.
+- **Replacements:** when a rival dies or is taken prisoner, a newcomer of the same kind appears 10 to 25 days later, so there are always six. If you killed the old rival, there's a 40% chance the newcomer is their kin: same family name, a grudge (hostile from the start), and close to the old rival's strength.
 - The **Rivals** view lists every rival: style, strength, ship, which faction they side with, their attitude, where you last saw them, and their recent history with you.
 
 ## Build plan (proposed)

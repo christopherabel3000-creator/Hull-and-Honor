@@ -22,22 +22,60 @@ export const STYLES = {
   mercenary: { label: 'a mercenary', combat: true, kinds: ['raider', 'raider', 'marauder', 'marauder', 'flagship'], likes: () => true },
 };
 
-export function ensureRivals(st) {
-  if (st.rivals) return;
+function makeRival(st, style, id) {
   const g = api.galaxy();
   const clans = Object.keys(st.rep.clans);
-  const used = new Set();
-  const uniq = (list, f) => { for (let i = 0; i < 50; i++) { const v = f ? f() : pick(list); if (!used.has(v)) { used.add(v); return v; } } return pick(list); };
-  st.rivals = Object.keys(STYLES).map((style, i) => {
-    const faction = { trader: 'guild', smuggler: clanKey(pick(clans)), pirate: clanKey(pick(clans)), hunter: 'concord', officer: 'concord', mercenary: clanKey(pick(clans)) }[style];
-    const home = g.systems.filter(s => STYLES[style].likes(s));
-    return {
-      id: i + 1, style, faction,
-      name: `${uniq(FIRST)} ${uniq(LAST)}`, ship: uniq(SHIPS),
-      level: rint(1, 3), attitude: 0, loc: pick(home.length ? home : g.systems).id,
-      nextMove: st.day + rint(1, 3), alive: true, met: false, seen: null, history: [],
-    };
-  });
+  const usedNames = new Set((st.rivals || []).flatMap(r => r.name.split(' ')));
+  const usedShips = new Set((st.rivals || []).map(r => r.ship));
+  const fresh = (list, used) => { const free = list.filter(x => !used.has(x)); const v = pick(free.length ? free : list); used.add(v); return v; };
+  const faction = { trader: 'guild', smuggler: clanKey(pick(clans)), pirate: clanKey(pick(clans)), hunter: 'concord', officer: 'concord', mercenary: clanKey(pick(clans)) }[style];
+  const home = g.systems.filter(x => STYLES[style].likes(x) && x.id !== st.location);
+  return {
+    id, style, faction,
+    name: `${fresh(FIRST, usedNames)} ${fresh(LAST, usedNames)}`, ship: fresh(SHIPS, usedShips),
+    level: rint(1, 3), attitude: 0, loc: pick(home.length ? home : g.systems).id,
+    nextMove: st.day + rint(1, 3), alive: true, met: false, seen: null, history: [],
+  };
+}
+
+export function ensureRivals(st) {
+  if (st.rivals) return;
+  st.rivals = [];
+  Object.keys(STYLES).forEach((style, i) => st.rivals.push(makeRival(st, style, i + 1)));
+}
+
+// Mark a rival as gone. A newcomer of the same kind arrives some days later.
+export function retireRival(r) {
+  r.alive = false;
+  r.goneDay = api.state().day;
+  r.replaceDay = r.goneDay + rint(10, 25);
+}
+
+function replaceFallen() {
+  const st = api.state();
+  for (const old of st.rivals) {
+    if (old.alive || old.replaced || old.replaceDay == null || st.day < old.replaceDay) continue;
+    old.replaced = true;
+    const id = Math.max(...st.rivals.map(r => r.id)) + 1;
+    const r = makeRival(st, old.style, id);
+    // Sometimes the newcomer is family, and they know who you are.
+    if (old.killedByPlayer && Math.random() < 0.4) {
+      r.name = `${r.name.split(' ')[0]} ${old.name.split(' ').slice(1).join(' ')}`;
+      r.attitude = -40;
+      r.level = Math.max(r.level, old.level - 1);
+      r.history.unshift({ day: st.day, note: `Kin of ${old.name}, out for revenge.` });
+      api.news(`${r.name}, kin of the late ${old.name}, has taken command of the ${r.ship} and is asking questions about Captain ${st.captain}.`);
+    } else {
+      api.news(`A new name is making waves: ${r.name} of the ${r.ship}, ${STYLES[r.style].label}.`);
+    }
+    st.rivals.push(r);
+  }
+  // Keep the list from growing forever: drop long-replaced rivals beyond the last few.
+  const fallen = st.rivals.filter(r => !r.alive && r.replaced);
+  if (fallen.length > 4) {
+    const drop = new Set(fallen.slice(0, fallen.length - 4).map(r => r.id));
+    st.rivals = st.rivals.filter(r => !drop.has(r.id));
+  }
 }
 
 export const rivalById = id => api.state().rivals.find(r => r.id === id);
@@ -127,6 +165,9 @@ export function tickRivals() {
   if (!st.rivals) return;
   if (st.rivalsDay == null) st.rivalsDay = st.day;
   while (st.rivalsDay < st.day) { st.rivalsDay++; advanceRivals(st.rivalsDay); }
+  // Older saves: any rival already gone without a replacement date gets one now.
+  for (const r of st.rivals) if (!r.alive && r.replaceDay == null) retireRival(r);
+  replaceFallen();
 }
 
 export const rivalAt = sysId => aliveRivals().find(r => r.loc === sysId) || null;
